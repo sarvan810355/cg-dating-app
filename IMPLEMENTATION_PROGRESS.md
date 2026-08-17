@@ -10,6 +10,170 @@ next task that follows from it.
 
 ---
 
+## 2026-08-17 — Verification (Task #9) implemented
+
+- **Phase:** Phase 7 — Verification (docs/ROADMAP.md numbering; internal
+  TaskList numbering for this same task is #9).
+- **Task:** Two independent verification levels for a user's account: mobile
+  OTP verification and photo/selfie verification, each with a
+  `NOT_VERIFIED`/`PENDING`/`VERIFIED`/`REJECTED`/`EXPIRED` state machine,
+  plus `mobileVerified`/`photoVerified` badges surfaced on other users'
+  views of a profile (public profile, discovery feed cards, match list
+  cards). SMS delivery for the OTP is MOCK/DEV-ONLY (no real provider
+  configured); photo verification has no automated face-match and only
+  reaches `PENDING` in this pass (approve/reject is a future Admin-panel
+  job).
+- **Design decisions:**
+  - **Verification state lives on `User`, not a separate `verifications`
+    collection.** `docs/DATABASE_SCHEMA.md` originally drafted a standalone
+    `verifications` collection keyed by `(userId, type)`. Implemented
+    instead as two sub-documents directly on `backend/models/User.js`
+    (`mobileVerification`, `photoVerification`) — same simplification
+    already used for `notificationPreferences` and the `role` field: a
+    1:1-with-user, always-fetched-together piece of account trust state
+    doesn't need its own collection, and the two levels have different
+    enough shapes (one has OTP hashing/expiry, the other has a submitted
+    photo + moderation fields) that flattening them into one generic
+    `(userId, type, status)` row would have meant a lot of type-conditional
+    field access anyway.
+  - **Real OTP logic, mocked delivery only.** OTP generation
+    (`crypto.randomInt`, not `Math.random()`), hashing (bcrypt, same cost
+    factor as password hashing), 10-minute expiry, and a 3-requests-per-
+    10-minute sliding-window rate limit are all real, non-mocked logic
+    (`backend/utils/verificationUtils.js`). Only the SMS *send* is mocked —
+    the OTP is logged to the server console and, **only when
+    `NODE_ENV !== 'production'`**, echoed back in the `request-otp`
+    response as a `devOtp` field. This was directly verified two ways: a
+    real-HTTP integration test with `NODE_ENV=development` confirms
+    `devOtp` is present and correct, and a separate run with
+    `NODE_ENV=production` confirms it's completely absent from the
+    response (while still being logged) — see "Tests performed" below.
+  - **Internal fields are `select: false` on the schema, not just omitted
+    by a serializer.** `mobileVerification.otpHash`/`otpExpiresAt`/
+    `otpRequestTimestamps` and `photoVerification.reviewNotes`/
+    `reviewedBy`/`reviewedAt` are marked `select: false` in
+    `backend/models/User.js`, so a default `User.findById()` anywhere else
+    in the codebase (e.g. a future route someone adds) can't accidentally
+    load and leak them — the verification routes that *do* need the OTP
+    fields explicitly opt back in via
+    `.select('+mobileVerification.otpHash ...')`. This is defense-in-depth
+    on top of the explicit-whitelist serializers
+    (`toOwnVerificationStatusJSON()`/`toPublicVerificationBadges()` in
+    `backend/utils/verificationUtils.js`), not a replacement for them.
+  - **Photo verification reuses the existing mock photo-storage pattern,
+    factored into a shared helper.** Rather than re-inlining the same
+    URL/base64/data-URI validation `backend/routes/profile.js`'s
+    `POST /me/photos` already has, pulled it into
+    `backend/utils/mockImageUpload.js#resolveMockImageUrl()` and had
+    `backend/routes/verification.js`'s photo/submit route call that. Left
+    `profile.js` itself untouched (still has its own inline copy) to avoid
+    touching a working, already-tested route in an unrelated task — a
+    natural follow-up would be to have `profile.js` adopt the shared helper
+    too, but that's out of scope here.
+  - **Verification badges added to three call sites, not just the one the
+    task named.** The task brief only explicitly named
+    `GET /api/profile/:userId`, but the frontend brief separately asked for
+    badges on Discovery and Matches cards too — since
+    `backend/utils/profileSerializers.js#toPublicProfileJSON()` is already
+    the shared "public profile" shape reused by
+    `backend/routes/discovery.js`'s feed and (indirectly, via the same
+    badge-boolean helper) `backend/routes/matches.js`'s `otherUser`, all
+    three were updated together (each bulk-fetching verification status for
+    its page of results in one query, not N+1) so the frontend requirement
+    could actually be met without a follow-up backend task.
+  - **`GET /api/profile/me` deliberately does NOT get verification badges
+    added to it.** The caller's own badges are served by the already-built
+    `GET /api/verification/status` instead, so verification data has one
+    authoritative response shape rather than being duplicated (and
+    potentially drifting) across two endpoints.
+  - **Signup was not changed to collect a phone number.** The task
+    described this as a flow that could reuse "whatever signup already
+    captures" — signup (`backend/routes/auth.js`) is email/password only,
+    so the mobile verification flow collects/confirms the phone number
+    itself, via an optional `phone` field on `request-otp`. `users.phone`
+    is therefore not unique-indexed (no cross-account collision check in
+    this pass) — flagged as technical debt in PROJECT_STATE.md, since the
+    original schema draft assumed phone-based signup which never happened.
+- **Backend files touched:** `backend/constants/verificationOptions.js`
+  (new), `backend/utils/verificationUtils.js` (new), `backend/utils/
+  mockImageUpload.js` (new — shared with profile photos in spirit, not code,
+  see above), `backend/routes/verification.js` (new — `POST mobile/
+  request-otp`, `POST mobile/verify-otp`, `POST photo/submit`,
+  `GET status`), `backend/models/User.js` (added `mobileVerification`/
+  `photoVerification`), `backend/routes/profile.js` (public `GET /:userId`
+  now includes badges), `backend/routes/discovery.js` (feed cards now
+  include badges, bulk-fetched), `backend/routes/matches.js` (`otherUser`
+  now includes badges, bulk-fetched), `backend/utils/profileSerializers.js`
+  (`toPublicProfileJSON()` takes an optional verification-source param),
+  `backend/server.js` (mounted `/api/verification`).
+- **Frontend files touched:** `frontend/src/api.js` (four new verification
+  calls), `frontend/src/components/VerificationBadge.jsx` (new),
+  `frontend/src/pages/Verification.jsx` (new — status-driven mobile OTP +
+  photo/selfie flows), `frontend/src/App.jsx` (added `/verification` route),
+  `frontend/src/pages/Dashboard.jsx` (own badges + a "Get Verified"/
+  "Verification" link), `frontend/src/pages/Settings.jsx` (Verification
+  link), `frontend/src/pages/Discovery.jsx` (badges on discovery cards),
+  `frontend/src/pages/Matches.jsx` (badges + a verified ring on the match
+  list's Avatar).
+- **Tests performed:**
+  - Backend boots cleanly with the new `/api/verification` route group
+    mounted alongside the existing six, no syntax/import errors.
+  - Curled all four new routes with no/bad auth — all four return `401`.
+  - A standalone Node script (38/38 checks, no live DB) directly exercised
+    `backend/constants/verificationOptions.js`,
+    `backend/utils/verificationUtils.js`, and
+    `backend/utils/mockImageUpload.js` in isolation: OTP entropy/format,
+    phone masking, phone-format validation, the pure sliding-window
+    rate-limit check (allows under the cap, blocks at the cap, prunes
+    entries outside the 10-minute window, exact-boundary pruning), OTP
+    expiry math, both serializers never leaking any internal/moderation
+    field even when the field is deliberately present on the input object,
+    the mock image-upload validator's URL/base64/size-cap handling, and
+    Mongoose schema-level checks — enum acceptance across all 5 statuses on
+    both sub-documents, rejection of an invalid enum value, and (via
+    `User.schema.path(...).options.select`) confirming the six internal
+    fields are genuinely `select: false` while the client-safe fields are
+    not.
+  - A second standalone script built a REAL Express app mounting the ACTUAL
+    `backend/routes/verification.js` file (only `backend/models/User.js`
+    swapped for an in-memory fake via `require.cache` injection, since
+    MongoDB is unreachable in this sandbox — same workaround pattern used
+    for every DB-touching test in this project so far) and drove it over
+    real HTTP with a real signed JWT: 33/33 checks covering request-otp
+    (happy path, invalid-phone rejection, missing-phone rejection, rate
+    limiting blocking exactly the 4th request in a 10-minute window,
+    already-verified short-circuit, allowing verification of a genuinely
+    different number even when already verified), verify-otp (correct OTP
+    accepted and flips to `VERIFIED`, wrong OTP rejected without changing
+    status, expired OTP rejected and flips status to `EXPIRED`, a used OTP
+    cannot be replayed, missing OTP body rejected), photo/submit (happy
+    path incl. the base64->data-URI path, `409` while already `PENDING`),
+    and `GET /status` (correct shape, reflects real state, never leaks
+    `otpHash`/`reviewNotes` even when both are deliberately present on the
+    fake user).
+  - That same request-otp flow was additionally run as a separate
+    `NODE_ENV=production` process and confirmed the response body contains
+    only `message`/`phone`/`expiresInSeconds` — no `devOtp` key at all —
+    while the OTP is still logged server-side, directly verifying the
+    "dev-only, never in production" requirement both ways.
+  - Frontend `npm run build` and `npm run lint` both pass; no new lint
+    warnings introduced (the two pre-existing `only-export-components`
+    warnings in `AuthContext.jsx`/`NotificationContext.jsx` are unrelated
+    and already an accepted pattern from prior sessions).
+  - Not exercised (see PROJECT_STATE.md's Known Technical Debt): real
+    MongoDB persistence of the new User fields (including confirming
+    `select: false` behavior against an actual query rather than only the
+    schema-level `.options.select` check), real concurrent-OTP-request
+    races, and anything involving a real SMS/photo-moderation provider
+    (neither exists — both are intentionally out of scope, see
+    `MOCK_FEATURES.md`).
+- **Next task:** Task #10 — Report/Block + Safety Center (see
+  PROJECT_STATE.md's "Next Exact Task" for the full scope breakdown and the
+  note that a TaskList tool was not available in this session to
+  cross-check the internal task graph directly).
+
+---
+
 ## 2026-08-17 — Notifications (Task #6) implemented
 
 - **Phase:** Phase 6 — Notifications (docs/ROADMAP.md numbering; internal

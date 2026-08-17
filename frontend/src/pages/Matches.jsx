@@ -4,6 +4,7 @@ import * as api from '../api';
 import Avatar from '../components/Avatar';
 import Button from '../components/Button';
 import NotificationBell from '../components/NotificationBell';
+import VerificationBadge from '../components/VerificationBadge';
 
 function Matches() {
   const [matches, setMatches] = useState([]);
@@ -76,7 +77,12 @@ function Matches() {
                   to={`/chat/${m.id}`}
                   className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3 transition hover:bg-primary-subtle"
                 >
-                  <Avatar src={m.otherUser.photo} name={m.otherUser.displayName} size="md" />
+                  <Avatar
+                    src={m.otherUser.photo}
+                    name={m.otherUser.displayName}
+                    size="md"
+                    verified={m.otherUser.photoVerified}
+                  />
                   <div className="min-w-0 flex-1">
                     <p className="truncate font-medium text-text-primary">
                       {m.otherUser.displayName || 'CG Dating user'}
@@ -86,6 +92,12 @@ function Matches() {
                       {[m.otherUser.city, m.otherUser.district].filter(Boolean).join(', ') ||
                         'Matched'}
                     </p>
+                    {(m.otherUser.mobileVerified || m.otherUser.photoVerified) && (
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {m.otherUser.mobileVerified && <VerificationBadge type="mobile" />}
+                        {m.otherUser.photoVerified && <VerificationBadge type="photo" />}
+                      </div>
+                    )}
                   </div>
                 </Link>
               </li>

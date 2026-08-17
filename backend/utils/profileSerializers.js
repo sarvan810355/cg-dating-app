@@ -1,4 +1,5 @@
 const { getCompletionHints } = require('./profileUtils');
+const { toPublicVerificationBadges } = require('./verificationUtils');
 
 // Shared profile -> API JSON shapes, used by backend/routes/profile.js and
 // backend/routes/discovery.js (discovery cards and match listings reuse the
@@ -38,7 +39,16 @@ function toOwnProfileJSON(profile) {
 // Never includes exact geo coordinates (only city/district), the owner's
 // completion score, or anything not meant for other daters to see. Used both
 // for GET /api/profile/:userId and for discovery feed / match cards.
-function toPublicProfileJSON(profile) {
+//
+// `verificationUser` (optional, Task #9 — Verification, see
+// docs/ROADMAP.md's Phase 7): the profile owner's `User` document (or just
+// its mobileVerification/photoVerification sub-fields), used to derive
+// `mobileVerified`/`photoVerified` booleans only — never the raw submitted
+// selfie or phone number, see
+// backend/utils/verificationUtils.js#toPublicVerificationBadges(). Omitting
+// it (existing call sites that haven't been updated yet) defaults both
+// badges to `false` rather than throwing.
+function toPublicProfileJSON(profile, verificationUser = null) {
   const obj = profile.toObject({ virtuals: true });
   return {
     userId: obj.user,
@@ -57,6 +67,7 @@ function toPublicProfileJSON(profile) {
     lifestyle: obj.lifestyle,
     personalityPrompts: obj.personalityPrompts,
     photos: obj.photos.map((p) => ({ url: p.url, isPrimary: p.isPrimary })),
+    ...toPublicVerificationBadges(verificationUser),
   };
 }
 

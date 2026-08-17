@@ -4,6 +4,7 @@ import * as api from '../api';
 import Button from '../components/Button';
 import MatchModal from '../components/MatchModal';
 import NotificationBell from '../components/NotificationBell';
+import VerificationBadge from '../components/VerificationBadge';
 import { DATING_INTENTIONS } from '../constants/profileOptions';
 
 function intentionLabel(value) {
@@ -37,6 +38,12 @@ function DiscoveryCard({ profile }) {
           </h2>
           {profile.age != null && <span className="text-lg text-text-secondary">{profile.age}</span>}
         </div>
+        {(profile.mobileVerified || profile.photoVerified) && (
+          <div className="mb-2 flex flex-wrap gap-1">
+            {profile.mobileVerified && <VerificationBadge type="mobile" />}
+            {profile.photoVerified && <VerificationBadge type="photo" />}
+          </div>
+        )}
         {(profile.city || profile.district) && (
           <p className="mb-2 text-sm text-text-secondary">
             {[profile.city, profile.district].filter(Boolean).join(', ')}

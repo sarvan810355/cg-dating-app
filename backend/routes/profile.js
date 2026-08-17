@@ -2,6 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 
 const Profile = require('../models/Profile');
+const User = require('../models/User');
 const { requireAuth } = require('../middleware/auth');
 const { isAtLeastMinAge } = require('../utils/profileUtils');
 const { toOwnProfileJSON, toPublicProfileJSON } = require('../utils/profileSerializers');
@@ -360,12 +361,19 @@ router.get('/:userId', requireAuth, async (req, res) => {
       return res.status(400).json({ message: 'Invalid user id' });
     }
 
-    const profile = await Profile.findOne({ user: userId });
+    const [profile, ownerUser] = await Promise.all([
+      Profile.findOne({ user: userId }),
+      // Task #9 — Verification: fetched alongside the profile so the public
+      // view can surface mobileVerified/photoVerified badges (booleans
+      // only, never the raw phone/selfie — see
+      // backend/utils/verificationUtils.js#toPublicVerificationBadges()).
+      User.findById(userId).select('mobileVerification.status photoVerification.status'),
+    ]);
     if (!profile) {
       return res.status(404).json({ message: 'Profile not found' });
     }
 
-    return res.json({ profile: toPublicProfileJSON(profile) });
+    return res.json({ profile: toPublicProfileJSON(profile, ownerUser) });
   } catch (err) {
     console.error('Get public profile error:', err);
     return res.status(500).json({ message: 'Something went wrong, please try again' });

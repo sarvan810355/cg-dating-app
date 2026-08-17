@@ -10,7 +10,9 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
 - [x] Project scaffold (backend + frontend)
 - [ ] Signup / login / JWT issuance (in progress by parallel agent)
 - [ ] Protected `GET /api/auth/me` route
-- [ ] Mobile OTP verification flow (signup step)
+- [x] Mobile OTP verification flow — **not** a signup step; implemented as a
+      separate post-signup Verification flow instead (Task #9, see the
+      Verification section below) since signup itself is email/password only
 - [ ] Password reset / forgot password
 - [ ] Rate limiting on auth endpoints
 
@@ -87,9 +89,18 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
       deferred, no credentials configured yet, see `MOCK_FEATURES.md`
 
 ### Verification
-- [ ] Mobile OTP verification (shared with signup)
-- [ ] Photo/selfie verification flow
-- [ ] Verification badge on profile
+- [x] Mobile OTP verification (`backend/routes/verification.js` —
+      `POST .../mobile/request-otp` + `.../verify-otp`, hashed OTP + 10-min
+      expiry + max-3-per-10-min rate limiting) — **not** shared with signup
+      (signup is email/password only, no phone captured there); MOCK SMS
+      delivery (console log + dev-only response field), see `MOCK_FEATURES.md`
+- [x] Photo/selfie verification flow (`POST /api/verification/photo/submit` ->
+      `PENDING`) — manual-review queue item for the future Admin panel, no
+      automated face-match in this MVP pass
+- [x] Verification badge on profile (`mobileVerified`/`photoVerified`
+      booleans on `GET /api/profile/:userId`, discovery feed cards, and match
+      list cards; `frontend/src/components/VerificationBadge.jsx`,
+      `frontend/src/pages/Verification.jsx`)
 
 ### Safety
 - [ ] Report user flow (API + UI)

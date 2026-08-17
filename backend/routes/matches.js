@@ -4,9 +4,11 @@ const mongoose = require('mongoose');
 const Match = require('../models/Match');
 const Profile = require('../models/Profile');
 const Message = require('../models/Message');
+const User = require('../models/User');
 const { requireAuth } = require('../middleware/auth');
 const { isParticipant, otherParticipant } = require('../utils/matchUtils');
 const { createNotification } = require('../utils/notificationUtils');
+const { toPublicVerificationBadges } = require('../utils/verificationUtils');
 const { roomName, isUserInRoom } = require('../socket');
 const { DEFAULT_MATCHES_LIMIT, MAX_MATCHES_LIMIT } = require('../constants/discoveryOptions');
 const {
@@ -75,8 +77,16 @@ router.get('/', requireAuth, async (req, res) => {
     const otherUserIds = pageMatches.map((m) =>
       m.users.find((u) => u.toString() !== req.user.id).toString()
     );
-    const profiles = await Profile.find({ user: { $in: otherUserIds } });
+    // Task #9 — Verification: bulk-fetch verification badges alongside
+    // profiles, same batching approach used for the profiles lookup itself.
+    const [profiles, verificationUsers] = await Promise.all([
+      Profile.find({ user: { $in: otherUserIds } }),
+      User.find({ _id: { $in: otherUserIds } }).select(
+        'mobileVerification.status photoVerification.status'
+      ),
+    ]);
     const profileByUser = new Map(profiles.map((p) => [p.user.toString(), p]));
+    const verificationByUser = new Map(verificationUsers.map((u) => [String(u._id), u]));
 
     const result = pageMatches.map((m) => {
       const otherUserId = m.users.find((u) => u.toString() !== req.user.id).toString();
@@ -93,6 +103,7 @@ router.get('/', requireAuth, async (req, res) => {
           district: p?.district || null,
           datingIntention: p?.datingIntention || null,
           photo: primaryPhoto,
+          ...toPublicVerificationBadges(verificationByUser.get(otherUserId)),
         },
       };
     });

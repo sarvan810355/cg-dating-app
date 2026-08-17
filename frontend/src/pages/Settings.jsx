@@ -130,8 +130,14 @@ function Settings() {
           )}
         </section>
 
-        <Link to="/dashboard">
+        <Link to="/verification">
           <Button variant="ghost" className="mt-4 w-full">
+            Verification
+          </Button>
+        </Link>
+
+        <Link to="/dashboard">
+          <Button variant="ghost" className="mt-2 w-full">
             Back to Dashboard
           </Button>
         </Link>

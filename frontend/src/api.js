@@ -164,3 +164,34 @@ export function getNotificationPreferences() {
 export function updateNotificationPreferences(prefs) {
   return request('/api/notifications/preferences', { method: 'PUT', body: prefs, auth: true });
 }
+
+// --- Verification (Task #9 in the internal TaskList; = docs/ROADMAP.md's
+// Phase 7) ------------------------------------------------------------------
+
+export function requestMobileOtp(phone) {
+  return request('/api/verification/mobile/request-otp', {
+    method: 'POST',
+    body: phone !== undefined ? { phone } : {},
+    auth: true,
+  });
+}
+
+export function verifyMobileOtp(otp) {
+  return request('/api/verification/mobile/verify-otp', {
+    method: 'POST',
+    body: { otp },
+    auth: true,
+  });
+}
+
+export function submitPhotoVerification({ url, imageBase64, mimeType }) {
+  return request('/api/verification/photo/submit', {
+    method: 'POST',
+    body: url ? { url } : { imageBase64, mimeType },
+    auth: true,
+  });
+}
+
+export function getVerificationStatus() {
+  return request('/api/verification/status', { method: 'GET', auth: true });
+}

@@ -11,6 +11,7 @@ const profileRouter = require('./routes/profile');
 const discoveryRouter = require('./routes/discovery');
 const matchesRouter = require('./routes/matches');
 const notificationsRouter = require('./routes/notifications');
+const verificationRouter = require('./routes/verification');
 const { initSocket } = require('./socket');
 
 const app = express();
@@ -29,6 +30,7 @@ app.use('/api/profile', profileRouter);
 app.use('/api/discovery', discoveryRouter);
 app.use('/api/matches', matchesRouter);
 app.use('/api/notifications', notificationsRouter);
+app.use('/api/verification', verificationRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'CG Dating API' });

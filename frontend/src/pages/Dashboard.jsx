@@ -1,16 +1,18 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { getMyProfile } from '../api';
+import { getMyProfile, getVerificationStatus } from '../api';
 import Avatar from '../components/Avatar';
 import Button from '../components/Button';
 import NotificationBell from '../components/NotificationBell';
+import VerificationBadge from '../components/VerificationBadge';
 
 function Dashboard() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [profile, setProfile] = useState(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
+  const [verification, setVerification] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -24,10 +26,23 @@ function Dashboard() {
       .finally(() => {
         if (!cancelled) setLoadingProfile(false);
       });
+    // Task #9 — Verification: own-account badges. Failure here is
+    // non-fatal — the dashboard still renders fine without badges (e.g. a
+    // brand-new account that's never touched verification).
+    getVerificationStatus()
+      .then((data) => {
+        if (!cancelled) setVerification(data);
+      })
+      .catch(() => {
+        if (!cancelled) setVerification(null);
+      });
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const mobileVerified = verification?.mobileVerification?.status === 'VERIFIED';
+  const photoVerified = verification?.photoVerification?.status === 'VERIFIED';
 
   function handleLogout() {
     logout();
@@ -51,7 +66,7 @@ function Dashboard() {
                 src={profile?.photos?.find((p) => p.isPrimary)?.url}
                 name={profile?.displayName}
                 size="md"
-                verified={false}
+                verified={photoVerified}
               />
               <div>
                 <p className="font-medium text-text-primary">
@@ -60,6 +75,12 @@ function Dashboard() {
                 <p className="text-xs text-text-secondary">
                   {profile ? `${profile.profileCompletionPercentage}% complete` : 'Not set up yet'}
                 </p>
+                {(mobileVerified || photoVerified) && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {mobileVerified && <VerificationBadge type="mobile" />}
+                    {photoVerified && <VerificationBadge type="photo" />}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -98,6 +119,12 @@ function Dashboard() {
             </Button>
           </Link>
         </div>
+
+        <Link to="/verification">
+          <Button variant="ghost" className="w-full">
+            {mobileVerified && photoVerified ? 'Verification' : 'Get Verified'}
+          </Button>
+        </Link>
 
         <Link to="/settings">
           <Button variant="ghost" className="w-full">

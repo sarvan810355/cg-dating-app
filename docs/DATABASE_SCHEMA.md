@@ -17,15 +17,30 @@ Where a schema below lists such a field, it is annotated `[NEVER EXPOSED]`.
 ### `users`
 Core account/auth record.
 - `_id`
-- `phone` (unique, indexed) — primary identifier for OTP-based auth
+- `phone` (indexed, not unique — see divergence note below) — set via the
+  Verification flow (Task #9 in the internal TaskList; = Phase 7), not at
+  signup; signup is currently email/password only.
 - `email` (unique, sparse, indexed) — optional
 - `passwordHash` `[NEVER EXPOSED]`
 - `role` — enum: `USER`, `SUPER_ADMIN`, `ADMIN`, `MODERATOR`, `SUPPORT`, `ANALYST` (default `USER`)
 - `status` — enum: `ACTIVE`, `SUSPENDED`, `BANNED`, `DELETED`
-- `isPhoneVerified`, `isPhotoVerified` (booleans)
-- `trustScore` `[NEVER EXPOSED]` — internal only, used by moderation/matching heuristics
+- `mobileVerification`, `photoVerification` — see the `verifications`
+  section below; **this replaced the originally drafted plain
+  `isPhoneVerified`/`isPhotoVerified` booleans** once Task #9 actually
+  implemented verification, since the product spec calls for a richer
+  `NOT_VERIFIED`/`PENDING`/`VERIFIED`/`REJECTED`/`EXPIRED` state machine per
+  level, not just a boolean.
+- `trustScore` `[NEVER EXPOSED]` — internal only, used by moderation/matching heuristics — **not implemented yet**, no code path sets or reads this.
 - `createdAt`, `updatedAt`, `lastLoginAt`
-- Indexes: unique on `phone`; unique+sparse on `email`; index on `role` (admin queries).
+- Indexes: unique+sparse on `email`; index on `role` (admin queries — role
+  field itself not yet implemented, see `admin_users` below).
+  **Divergence:** `phone` is **not** unique-indexed in the implemented
+  schema (`backend/models/User.js`) — signup doesn't collect a phone number
+  at all (email/password only), and Task #9 lets a caller set/change their
+  phone via `POST /api/verification/mobile/request-otp` with no
+  cross-account uniqueness check in this MVP pass. A future hardening pass
+  should probably add a uniqueness constraint once phone becomes a
+  meaningful identifier (e.g. before phone-based login/2FA is added).
 
 ### `profiles` — `[IMPLEMENTED, with divergences from the original draft below]`
 Public-facing dating profile, 1:1 with `users`. Implemented in
@@ -75,8 +90,15 @@ Public-facing dating profile, 1:1 with `users`. Implemented in
 - `profileCompletionPercentage` (computed, 0-100, recomputed server-side on every
   save — see `backend/utils/profileUtils.js`). Named `profileCompletionPercentage`
   rather than the originally drafted `profileStrengthScore` (same concept).
-- `isPrimaryPhotoVerified` — **not yet implemented**; deferred until the
-  Verification feature (photo/selfie verification) lands.
+- `isPrimaryPhotoVerified` — **still not implemented as a Profile field.**
+  Task #9 (Verification) landed `photoVerification` on `users` instead (see
+  the `verifications` section below) rather than adding this field to
+  `profiles` — same "verification is account-level trust state, not a
+  profile-content field" reasoning already applied to
+  `notificationPreferences`. `GET /api/profile/:userId`'s public response
+  now includes a `photoVerified` boolean (and `mobileVerified`) derived from
+  `users.photoVerification`/`users.mobileVerification`, which serves the
+  same purpose this field was reserved for.
 - `createdAt`, `updatedAt`
 - Indexes: unique on `user`; `2dsphere` on `location`; compound index on
   `(datingIntention, district)` for discovery filtering.
@@ -299,13 +321,63 @@ doesn't have the app open is deferred. See `MOCK_FEATURES.md`.
   `createdAt`
 - Indexes: unique compound on `(blockerId, blockedUserId)`.
 
-### `verifications`
-- `_id`, `userId` (ref `users`, unique per type via compound), `type` (`MOBILE_OTP`,
-  `SELFIE_PHOTO`), `status` (`PENDING`, `APPROVED`, `REJECTED`), `evidenceUrl`
-  (Cloudinary, selfie only) `[NEVER EXPOSED as raw govt ID — selfie/photo verification
-  only in MVP, no government ID collection planned in MVP]`, `reviewedBy` (ref `users`,
-  admin), `reviewedAt`, `createdAt`
-- Indexes: compound `(userId, type)`.
+### `verifications` — `[IMPLEMENTED, with divergences from the original draft below]`
+Implemented in `backend/models/User.js` (see the `users` section above);
+routes in `backend/routes/verification.js`; helpers in
+`backend/utils/verificationUtils.js`, `backend/utils/mockImageUpload.js`
+(shared with the profile-photo mock path), constants in
+`backend/constants/verificationOptions.js`.
+
+**Divergence from the original draft:** implemented as two sub-documents
+directly on `users` (`mobileVerification`, `photoVerification`) rather than
+a separate `verifications` collection keyed by `(userId, type)` — same
+simplification rationale already used for `notificationPreferences` and the
+`admin_users` role field: a 1:1-with-user, always-fetched-together piece of
+account trust state doesn't need its own collection. The status enum was
+also expanded from the draft's `PENDING`/`APPROVED`/`REJECTED` to
+`NOT_VERIFIED`/`PENDING`/`VERIFIED`/`REJECTED`/`EXPIRED` — `NOT_VERIFIED` is
+the real default state (the draft had no "never attempted" value), `VERIFIED`
+replaces `APPROVED` (matches this codebase's `Match`/`Like` terser style),
+and `EXPIRED` is new (an OTP that timed out before being entered, or —
+reserved for future use — a stale pending photo review).
+
+- `users.mobileVerification`:
+  - `status` — enum: `NOT_VERIFIED` (default), `PENDING`, `VERIFIED`,
+    `REJECTED`, `EXPIRED`.
+  - `verifiedAt` (`Date`, null until `VERIFIED`).
+  - `otpHash` `[NEVER EXPOSED]` — bcrypt hash of the current OTP (same cost
+    factor as password hashing), `select: false` on the schema so a default
+    `User.find()`/`findById()` never loads it.
+  - `otpExpiresAt` `[NEVER EXPOSED]` — `select: false`; OTP is valid for 10
+    minutes from generation.
+  - `otpRequestTimestamps` `[NEVER EXPOSED]` — `select: false`; sliding
+    window of recent `request-otp` calls, used for rate limiting (max 3
+    requests per 10-minute window).
+- `users.photoVerification`:
+  - `status` — same 5-value enum as above.
+  - `verifiedAt` (`Date`, null until `VERIFIED` — no code path sets this yet
+    in this pass, since photo approval is an Admin-panel action not built
+    yet; see the MOCK/TEMPORARY note in `docs/API_DOCUMENTATION.md`'s
+    Verification section).
+  - `submittedPhotoUrl` — the selfie submitted for review. **MOCK/TEMPORARY**
+    storage, same non-Cloudinary pattern as `profiles.photos` (real external
+    URL, or a base64 `data:` URI stored directly on the document — see
+    `backend/utils/mockImageUpload.js` and `MOCK_FEATURES.md`). Returned to
+    the **owner** of the submission (`GET /api/verification/status`), but
+    `[NEVER EXPOSED as raw evidence to OTHER users]` — any other user's view
+    of this profile only ever sees the derived `photoVerified` boolean, via
+    `backend/utils/verificationUtils.js#toPublicVerificationBadges()`.
+  - `submittedAt` (`Date`).
+  - `reviewNotes`, `reviewedBy` (ref `users`, admin), `reviewedAt`
+    `[NEVER EXPOSED]` — reserved fields for the future Admin panel's
+    verification review queue (docs/ROADMAP.md's Phase 9); `select: false`
+    on the schema; no code path reads or writes them in this pass beyond
+    resetting them to `null` on a fresh resubmission.
+- No dedicated indexes beyond the ones `users` already has — verification
+  state is always looked up by the owning user's `_id` (already the primary
+  key), never queried independently across users in this MVP pass (the
+  future Admin review queue will need a `(photoVerification.status)` index
+  once it's built — not added preemptively here).
 
 ### `subscriptions`
 - `_id`, `userId` (ref `users`, indexed), `plan` (`CG_PLUS`, `CG_PRO`, `CG_ELITE`),

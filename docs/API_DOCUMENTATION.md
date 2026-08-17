@@ -141,6 +141,9 @@ browsing in this app.
 - Returns another user's **public** profile view — a smaller field set than
   `GET /me`: no `profileCompletionPercentage`/`completionHints`, no exact geo
   coordinates (only `city`/`district`), no `dateOfBirth` (only the derived `age`).
+  Also includes `mobileVerified`/`photoVerified` booleans (Task #9 —
+  Verification, see Section 6 below) — never the raw phone number or
+  submitted selfie.
 - **Errors:** `400` — `userId` is not a valid id; `404` — no profile for that user.
 
 ### `POST /api/profile/me/photos`
@@ -243,7 +246,7 @@ note below. Routes in `backend/routes/matches.js`.
       {
         "id": "...",
         "matchedAt": "...",
-        "otherUser": { "userId", "displayName", "age", "city", "district", "datingIntention", "photo" }
+        "otherUser": { "userId", "displayName", "age", "city", "district", "datingIntention", "photo", "mobileVerified", "photoVerified" }
       }
     ],
     "page": 1,
@@ -372,14 +375,107 @@ ever create a `Message` document.
   `PATCH .../messages/read` that actually changed at least one message —
   `{ matchId, readBy, readAt }`.
 
-## 6. Verification — `[PLANNED]`
+## 6. Verification — `[IMPLEMENTED, MOCK SMS delivery + manual photo review]`
 
-Base path: `/api/verification`
+Base path: `/api/verification`. Routes in `backend/routes/verification.js`.
+All routes require auth. Two independent verification levels, each its own
+status: `NOT_VERIFIED` (default), `PENDING`, `VERIFIED`, `REJECTED`,
+`EXPIRED` (see `docs/DATABASE_SCHEMA.md`'s `verifications` section for the
+full field list and the divergence from the original draft's endpoint
+paths/collection shape).
 
-- `POST /api/verification/otp/request` / `POST /api/verification/otp/verify` — mobile OTP.
-- `POST /api/verification/selfie` — auth required — upload a selfie for manual/human
-  review; creates a `PENDING` `verifications` record.
-- `GET /api/verification/status` — auth required — caller's current verification status.
+**MOCK/TEMPORARY note (SMS):** there is no real SMS provider (Twilio/MSG91/
+etc) configured — see `MOCK_FEATURES.md`. OTP generation, hashing, expiry,
+and verification are all real; only the *delivery* is mocked (logged to the
+server console, and echoed back in the response body ONLY when
+`NODE_ENV !== 'production'` — never in production).
+
+**MOCK/TEMPORARY note (photo storage):** selfie submission reuses the exact
+same non-Cloudinary storage pattern as profile photos
+(`backend/utils/mockImageUpload.js`, shared with
+`backend/routes/profile.js`'s `POST /me/photos`) — see `MOCK_FEATURES.md`.
+
+**Manual review, not automated:** there is no automated face-match against
+profile photos. `POST /api/verification/photo/submit` only gets the record
+to `PENDING` for a human reviewer — nothing in this pass ever transitions a
+`photoVerification.status` to `VERIFIED`/`REJECTED`; that will be the future
+Admin panel's verification review queue (`docs/ROADMAP.md`'s Phase 9,
+`docs/API_DOCUMENTATION.md`'s `GET`/`PUT /api/admin/verifications*` in the
+Admin section below).
+
+### `POST /api/verification/mobile/request-otp`
+- **Request body (optional):** `{ "phone": "+91XXXXXXXXXX" }` — required
+  only if the caller has no phone on file yet, or is verifying a *different*
+  number than the one currently on file (10-15 digits, optional leading
+  `+`). If omitted, reuses the caller's existing `users.phone`.
+- Generates a 6-digit OTP, hashes it (bcrypt, same cost factor as password
+  hashing) and stores the hash + a 10-minute expiry on the user — the
+  plaintext OTP is never persisted. Sets `mobileVerification.status` to
+  `PENDING`.
+- **Rate limiting:** at most 3 requests per rolling 10-minute window per
+  user (sliding window over `mobileVerification.otpRequestTimestamps`) —
+  `429` once exceeded.
+- **MOCK SMS delivery:** the OTP is logged server-side
+  (`[MOCK SMS] OTP for user <id> (<masked phone>): <otp>`) standing in for
+  an actual SMS send.
+- **Success response:** `200 OK` —
+  ```json
+  { "message": "OTP sent", "phone": "*********3210", "expiresInSeconds": 600 }
+  ```
+  When `NODE_ENV !== 'production'` (dev/test only), an additional
+  **`devOtp`** field with the plaintext OTP is included — this is the ONLY
+  place a plaintext OTP is ever returned to a client, and it is never
+  present when `NODE_ENV === 'production'`.
+- **Errors:** `400` — invalid/missing phone, or already `VERIFIED` for the
+  same number; `429` — rate limited; `401`; `500`.
+
+### `POST /api/verification/mobile/verify-otp`
+- **Request body:** `{ "otp": "123456" }`
+- Compares the submitted OTP against the stored hash; on success sets
+  `mobileVerification.status` to `VERIFIED` and `verifiedAt` to now, and
+  invalidates the OTP (cannot be replayed). An expired OTP flips the status
+  to `EXPIRED` as a side effect of the failed verify attempt (the caller
+  must call `request-otp` again).
+- **Success response:** `200 OK` — same shape as `GET /status` below.
+- **Errors:** `400` — missing `otp`, no active OTP request found, incorrect
+  OTP, or the OTP has expired; `401`; `500`.
+
+### `POST /api/verification/photo/submit`
+- **Request body:** same MOCK/TEMPORARY shape as
+  `POST /api/profile/me/photos` — either `{ "url": "https://..." }` (or an
+  already-formed `data:image/...;base64,...` URI), or
+  `{ "imageBase64": "<base64>", "mimeType": "image/jpeg" }`.
+- Sets `photoVerification.status` to `PENDING` and stores the submitted
+  photo (owner-visible only, see the field-level note in
+  `docs/DATABASE_SCHEMA.md`). Resubmitting after `REJECTED`/`EXPIRED`/
+  `NOT_VERIFIED` clears any prior review outcome.
+- **Success response:** `201 Created` — same shape as `GET /status` below.
+- **Errors:** `400` — invalid/missing `url`/`imageBase64`; `409` — a
+  submission is already `PENDING` review (no duplicate spam); `401`; `500`.
+
+### `GET /api/verification/status`
+- Returns the caller's current state for both verification levels.
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "mobileVerification": { "status": "VERIFIED", "verifiedAt": "...", "phone": "*********3210" },
+    "photoVerification": { "status": "PENDING", "verifiedAt": null, "submittedPhotoUrl": "...", "submittedAt": "..." }
+  }
+  ```
+  Never includes `otpHash`/`otpExpiresAt`/`otpRequestTimestamps` or
+  `reviewNotes`/`reviewedBy`/`reviewedAt` — built from an explicit
+  whitelist, see `backend/utils/verificationUtils.js#toOwnVerificationStatusJSON()`.
+- **Errors:** `401`; `500`.
+
+### Verification badges on profiles
+`GET /api/profile/:userId` (public profile view), `GET /api/discovery/feed`
+(candidate cards), and `GET /api/matches` (`otherUser`) all now include two
+booleans derived from the *other* user's verification state:
+`mobileVerified`, `photoVerified` — never the raw phone number or submitted
+selfie (see `backend/utils/verificationUtils.js#toPublicVerificationBadges()`).
+`GET /api/profile/me` does **not** include these — the caller's own badges
+come from `GET /api/verification/status` instead, so verification data isn't
+duplicated across two response shapes.
 
 ## 7. Safety (Report / Block) — `[PLANNED]`
 

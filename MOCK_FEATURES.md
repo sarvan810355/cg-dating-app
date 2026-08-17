@@ -55,6 +55,41 @@ move items to "Resolved" rather than deleting them, so there's a record of what 
       a registration endpoint, and calling the FCM Admin SDK from inside
       `createNotification()` (`backend/utils/notificationUtils.js`) alongside
       the existing Socket.IO emit.
+- [ ] **SMS/OTP provider (mobile verification) — no credentials configured,
+      MOCK/DEV-ONLY delivery.** Task #9 (Verification, see `docs/ROADMAP.md`
+      Phase 7) implemented real, non-mocked OTP generation/hashing/expiry/
+      rate-limiting logic (`backend/routes/verification.js`,
+      `backend/utils/verificationUtils.js`) — a real 6-digit OTP is
+      generated via `crypto.randomInt`, hashed with bcrypt before storage,
+      given a genuine 10-minute expiry, and rate-limited (max 3 requests per
+      rolling 10-minute window). What's mocked is purely the **delivery**
+      mechanism: there's no Twilio/MSG91/etc account, so
+      `POST /api/verification/mobile/request-otp` logs the OTP to the server
+      console (`[MOCK SMS] OTP for user <id> (<masked phone>): <otp>`)
+      instead of sending a real SMS, and — **only when
+      `NODE_ENV !== 'production'`** — also returns it in the response body
+      as a `devOtp` field so this can be tested/demoed without a real phone.
+      This dev-only field is verified (via a standalone test harness, see
+      IMPLEMENTATION_PROGRESS.md) to never appear when
+      `NODE_ENV === 'production'`. Wiring a real provider would mean adding
+      Twilio/MSG91 credentials and replacing the `console.log` call with an
+      actual API call — the rest of the flow (hashing, expiry, rate
+      limiting, the `mobileVerification` state machine) would not need to
+      change.
+- [ ] **Photo/selfie verification — no automated face-match, manual-review
+      queue item.** `POST /api/verification/photo/submit`
+      (`backend/routes/verification.js`) reuses the exact same
+      MOCK/TEMPORARY photo-storage pattern already used for profile photos
+      (`backend/utils/mockImageUpload.js`, no Cloudinary — see the profile-
+      photo entry above) and gets `photoVerification.status` to `PENDING`.
+      There is, and was never intended to be in this MVP pass, any automated
+      face-match against the user's profile photos — real human review is
+      required to transition a submission to `VERIFIED`/`REJECTED`, and no
+      code path does that yet (that's the future Admin panel's verification
+      review queue, `docs/ROADMAP.md`'s Phase 9 / `GET`/
+      `PUT /api/admin/verifications*` in `docs/API_DOCUMENTATION.md`). This
+      is a genuine scope boundary, not a stand-in for something planned to
+      auto-approve later.
 - [ ] **Razorpay (payments/subscriptions) — no credentials configured.** Subscription plans
       and paywall UI are planned as part of MVP, but real payment processing may ship as
       MOCK/TEMPORARY first (e.g. a fake "success" entitlement toggle) if Razorpay isn't

@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const Profile = require('../models/Profile');
 const Like = require('../models/Like');
 const Match = require('../models/Match');
+const User = require('../models/User');
 const { requireAuth } = require('../middleware/auth');
 const { toPublicProfileJSON } = require('../utils/profileSerializers');
 const { canonicalPair, isMutualLike } = require('../utils/matchUtils');
@@ -129,8 +130,16 @@ router.get('/feed', requireAuth, async (req, res) => {
     const hasMore = candidates.length > limit;
     const pageCandidates = candidates.slice(0, limit);
 
+    // Task #9 — Verification: bulk-fetch verification badges for this
+    // page's candidates in one query rather than N+1, same batching pattern
+    // as backend/routes/matches.js's otherUser profile lookup.
+    const candidateUsers = await User.find({
+      _id: { $in: pageCandidates.map((p) => p.user) },
+    }).select('mobileVerification.status photoVerification.status');
+    const userById = new Map(candidateUsers.map((u) => [String(u._id), u]));
+
     return res.json({
-      profiles: pageCandidates.map(toPublicProfileJSON),
+      profiles: pageCandidates.map((p) => toPublicProfileJSON(p, userById.get(String(p.user)))),
       page,
       hasMore,
     });
