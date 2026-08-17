@@ -9,6 +9,7 @@ const { requireAuth } = require('../middleware/auth');
 const { toPublicProfileJSON } = require('../utils/profileSerializers');
 const { canonicalPair, isMutualLike } = require('../utils/matchUtils');
 const { createNotification } = require('../utils/notificationUtils');
+const { getBlockedUserIds } = require('../utils/blockUtils');
 const { DATING_INTENTIONS } = require('../constants/profileOptions');
 const {
   SWIPE_ACTIONS,
@@ -102,21 +103,26 @@ router.get('/feed', requireAuth, async (req, res) => {
     }
 
     // Exclude: self, anyone already swiped on (like or pass, either
-    // decision means "don't show again"), and anyone already matched with.
-    const [alreadySwipedIds, myMatches] = await Promise.all([
+    // decision means "don't show again"), anyone already matched with, and
+    // — Task #10 (Safety — Report/Block, see docs/ROADMAP.md's Phase 8) —
+    // anyone involved in a block with the caller in EITHER direction: users
+    // the caller has blocked, and users who have blocked the caller. This
+    // was the discovery.js `TODO(Report/Block...)` referenced by
+    // docs/API_DOCUMENTATION.md/TODO.md — now implemented via the shared
+    // backend/utils/blockUtils.js#getBlockedUserIds() helper so this exact
+    // bidirectional rule is applied identically in the matches list too
+    // (backend/routes/matches.js).
+    const [alreadySwipedIds, myMatches, blockedIds] = await Promise.all([
       Like.find({ fromUser: req.user.id }).distinct('toUser'),
       Match.find({ users: req.user.id, unmatched: false }).select('users'),
+      getBlockedUserIds(req.user.id),
     ]);
     const matchedIds = myMatches.map((m) =>
       m.users.find((u) => u.toString() !== req.user.id)
     );
 
-    // TODO(Report/Block — not built yet, see TODO.md): once a Block model
-    // exists, also exclude users the caller has blocked and users who have
-    // blocked the caller, both directions, from this feed.
-
     const excludedIds = new Set(
-      [req.user.id, ...alreadySwipedIds, ...matchedIds].map(String)
+      [req.user.id, ...alreadySwipedIds, ...matchedIds, ...blockedIds].map(String)
     );
     filter.user = { $nin: [...excludedIds] };
 

@@ -9,6 +9,7 @@ const { requireAuth } = require('../middleware/auth');
 const { isParticipant, otherParticipant } = require('../utils/matchUtils');
 const { createNotification } = require('../utils/notificationUtils');
 const { toPublicVerificationBadges } = require('../utils/verificationUtils');
+const { getBlockedUserIds, isBlockedEitherWay } = require('../utils/blockUtils');
 const { roomName, isUserInRoom } = require('../socket');
 const { DEFAULT_MATCHES_LIMIT, MAX_MATCHES_LIMIT } = require('../constants/discoveryOptions');
 const {
@@ -21,8 +22,26 @@ const router = express.Router();
 
 // Shared by all three message routes below: loads the match and checks
 // (a) it's a valid id, (b) it exists, (c) the caller is one of its two
-// participants, (d) it hasn't been unmatched. Returns either
-// `{ match }` or `{ status, message }` for the route to short-circuit on.
+// participants, (d) it hasn't been unmatched, (e) — Task #10 (Safety —
+// Report/Block, see docs/ROADMAP.md's Phase 8) — neither participant has
+// blocked the other. Returns either `{ match }` or `{ status, message }` for
+// the route to short-circuit on.
+//
+// Design decision (documented per the Task #10 spec's request): blocking
+// does NOT delete or mutate the underlying Match document (unlike unmatch,
+// which sets `unmatched`/`unmatchedAt`/`unmatchedBy`) — a block is a
+// separate, one-directional relationship that can be undone independently
+// of the match itself (see backend/models/Block.js). Its effect on this
+// match is therefore enforced here, at read/write time, returning `403`
+// (same status/shape as the existing "not a participant" and "unmatched"
+// checks above) rather than a distinct error — from the caller's
+// perspective this conversation simply isn't accessible, whether that's
+// because they were never a participant, they unmatched, or a block is now
+// in effect. `GET /api/matches` additionally hides such matches from the
+// list entirely (see the route below) rather than showing a match card that
+// 403s when opened — the 403 here remains as defense-in-depth for anyone
+// who already has the matchId (e.g. a still-open chat tab, a socket
+// already joined to the room) at the moment a block takes effect.
 async function loadAuthorizedMatch(matchId, userId) {
   if (!mongoose.Types.ObjectId.isValid(matchId)) {
     return { status: 400, message: 'matchId must be a valid id' };
@@ -38,6 +57,13 @@ async function loadAuthorizedMatch(matchId, userId) {
     return {
       status: 403,
       message: 'This match has ended — you can no longer send messages here',
+    };
+  }
+  const other = otherParticipant(match, userId);
+  if (await isBlockedEitherWay(userId, other)) {
+    return {
+      status: 403,
+      message: 'This conversation is not available',
     };
   }
   return { match };
@@ -66,7 +92,25 @@ router.get('/', requireAuth, async (req, res) => {
     if (!Number.isFinite(limit) || limit < 1) limit = DEFAULT_MATCHES_LIMIT;
     limit = Math.min(limit, MAX_MATCHES_LIMIT);
 
-    const matches = await Match.find({ users: req.user.id, unmatched: false })
+    // Task #10 (Safety — Report/Block, see docs/ROADMAP.md's Phase 8):
+    // hide any match where the caller and the other participant have
+    // blocked each other, in EITHER direction, from this list entirely —
+    // the design decision documented on loadAuthorizedMatch() above. The
+    // underlying Match document is untouched (blocking is independent of
+    // unmatch); this is a query-time filter only, using the same
+    // getBlockedUserIds() set the discovery feed uses so both surfaces stay
+    // consistent with a single source of truth for "who is blocked".
+    const blockedIds = await getBlockedUserIds(req.user.id);
+    const matchFilter = { users: req.user.id, unmatched: false };
+    if (blockedIds.size > 0) {
+      // `$all` keeps the "caller is a participant" condition; `$nin`
+      // excludes any match whose participant array contains a blocked id
+      // (i.e. the *other* participant — the caller's own id can never be in
+      // `blockedIds`, since blocking yourself is rejected at creation time).
+      matchFilter.users = { $all: [req.user.id], $nin: [...blockedIds] };
+    }
+
+    const matches = await Match.find(matchFilter)
       .sort({ matchedAt: -1 })
       .skip((page - 1) * limit)
       .limit(limit + 1);

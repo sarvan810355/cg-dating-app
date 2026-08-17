@@ -10,6 +10,163 @@ next task that follows from it.
 
 ---
 
+## 2026-08-17 — Safety: Report/Block + Safety Center (Task #10) implemented
+
+- **Phase:** Phase 8 — Safety (docs/ROADMAP.md numbering; internal TaskList
+  numbering for this same task is #10).
+- **Task:** Report and Block user flows plus a Safety Center screen —
+  `POST /api/reports` (reason enum + optional details/evidence),
+  `POST`/`DELETE`/`GET /api/blocks`, and bidirectional exclusion of blocked
+  users from the discovery feed, matches list, and messaging (REST +
+  Socket.IO), reachable from a Report/Block menu on Discovery cards and in
+  Chat, plus a Blocked Users management screen and a static Safety Center
+  screen.
+- **Continuity note — recovered from a prior session's mid-task
+  interruption.** A previous background session started this exact task and
+  produced the entire backend (`backend/models/Block.js`, `Report.js`,
+  `backend/routes/blocks.js`, `reports.js`, `backend/constants/
+  safetyOptions.js`, `backend/utils/blockUtils.js`, and the discovery/
+  matches/socket/server.js wiring) before hitting a session/API limit and
+  stopping mid-task, leaving that work uncommitted in the working tree. This
+  session picked it up: reviewed every backend file line-by-line against the
+  task spec (found it solid — correct validation, dedup, 404s, consistent
+  bidirectional-exclusion logic, well-commented) rather than rewriting or
+  second-guessing it, re-verified it independently with a fresh integration
+  test (see "Tests performed" below, which is new work in this pass, not
+  inherited), and then built the entire frontend + this doc pass on top,
+  which had not been started yet. This is the project's own
+  credit-interruption protocol working as intended — flagged here explicitly
+  per that protocol's own convention, same as PROJECT_STATE.md's "Current
+  Task" line for this entry.
+- **Design decisions:**
+  - **Blocking is one-directional to create, bidirectional in effect.**
+    `backend/models/Block.js` only ever records the blocker's own decision —
+    if the blocked user also wants to block back, they create their own
+    separate document. But *nothing else* about a block is one-directional:
+    `backend/utils/blockUtils.js#getBlockedUserIds()`/`#isBlockedEitherWay()`
+    are the single source of truth for "does a block affect this pair",
+    consumed identically by the discovery feed, the matches list, all three
+    message routes' `loadAuthorizedMatch()`, and Socket.IO's `match:join` —
+    so a blocked user can never see or reach the blocker through any
+    surface, and vice versa, regardless of who blocked whom.
+  - **Blocking doesn't mutate `Match` (or anything else) — it's a
+    query-time filter only.** Unlike unmatch (a permanent, mutating action
+    that sets `unmatched`/`unmatchedAt`/`unmatchedBy` on the `Match`
+    document itself), a block's effect on an existing match is enforced
+    entirely by filtering at read time. This was a deliberate choice (kept
+    from the inherited backend work, and endorsed on review): it means
+    unblocking is a clean, total undo — the match, its full message history,
+    and read receipts all reappear exactly as they were, with nothing to
+    "restore" because nothing was ever touched.
+  - **Blocking is silent; reporting is confidential.** `POST /api/blocks`
+    never creates a `Notification` for the blocked user — they simply stop
+    being able to reach or be reached by the blocker, with no explanation
+    surfaced anywhere. `POST /api/reports` never notifies the reported user
+    either, and nothing about a report is visible to anyone but the
+    reporter (their own `POST` response) and, later, an admin — there's no
+    `GET /api/reports` "my reports" list, since nothing asked for one and
+    the response to the `POST` is the report's only client-visible moment.
+  - **Report evidence is plain strings, no automated moderation.** Kept the
+    inherited backend's choice not to build a file-upload path for report
+    evidence (`evidence` is capped free-text/URL strings) and not to add any
+    automated spam/scam/abuse-detection signal — both are explicitly
+    documented as out of scope in `MOCK_FEATURES.md`'s two new entries for
+    this pass, with automated detection specifically deferred to the
+    already-planned V3 "Trust Engine" (see `docs/ROADMAP.md`/`TODO.md`), not
+    invented as a new scope decision in this pass.
+  - **Frontend: one shared `SafetyMenu` component, not two separate
+    Report/Block UIs.** Discovery (report/block a profile card) and Chat
+    (report/block the other person in a match) both need the identical
+    "⋯ -> Report / Block" interaction against a different target user each
+    time — built once as `frontend/src/components/SafetyMenu.jsx` (which
+    itself owns opening `ReportModal.jsx` and the block confirm+API call)
+    and reused from both places with just `userId`/`userName`/`onBlocked`
+    props, rather than duplicating the menu, the confirm dialog, and the
+    error handling in each page.
+  - **Block confirmation is a plain `window.confirm`, not a custom
+    Dialog component.** Per the task spec's explicit allowance
+    ("doesn't need to be fancy") and to avoid building a full generic
+    Dialog/Modal component (docs/DESIGN_SYSTEM.md lists one but nothing has
+    built it yet) just for this one consequential-but-simple confirmation;
+    `ReportModal.jsx` still gets a proper Modal-style overlay since it's a
+    real form, following `MatchModal.jsx`'s existing pattern.
+- **Backend files touched (inherited from the interrupted prior session,
+  reviewed and independently re-verified in this pass — see "Continuity
+  note" above):** `backend/constants/safetyOptions.js` (new), `backend/
+  models/Block.js` (new), `backend/models/Report.js` (new), `backend/utils/
+  blockUtils.js` (new), `backend/routes/blocks.js` (new), `backend/routes/
+  reports.js` (new), `backend/routes/discovery.js` (feed exclusion),
+  `backend/routes/matches.js` (matches-list exclusion + message-route
+  authorization), `backend/socket.js` (`match:join` authorization),
+  `backend/server.js` (mounted the two new route groups).
+- **Frontend files touched (new work this pass):** `frontend/src/
+  constants/safetyOptions.js` (new), `frontend/src/api.js` (`reportUser`/
+  `blockUser`/`unblockUser`/`getBlockedUsers`), `frontend/src/components/
+  ReportModal.jsx` (new), `frontend/src/components/SafetyMenu.jsx` (new),
+  `frontend/src/pages/Discovery.jsx` (SafetyMenu overlay on the card photo;
+  a successful block removes that card from the queue immediately),
+  `frontend/src/pages/Chat.jsx` (SafetyMenu in the header; a successful
+  block navigates to `/matches`), `frontend/src/pages/BlockedUsers.jsx`
+  (new), `frontend/src/pages/SafetyCenter.jsx` (new, static content),
+  `frontend/src/pages/Settings.jsx` (Safety Center + Blocked Users links),
+  `frontend/src/App.jsx` (`/safety-center`, `/settings/blocked-users`
+  routes).
+- **Tests performed (all new work this pass — none of this was inherited):**
+  - Backend boots cleanly with `/api/reports` and `/api/blocks` mounted
+    alongside the existing seven route groups, no syntax/import errors.
+  - Curled `POST/GET/DELETE /api/blocks` and `POST /api/reports` with
+    no/bad auth — all return `401`.
+  - A standalone Node script (65/65 checks, no live DB) built a REAL
+    Express app + real HTTP server + real Socket.IO server mounting the
+    ACTUAL `backend/routes/blocks.js`, `reports.js`, `discovery.js`,
+    `matches.js`, and `backend/socket.js` files (only the Mongoose model
+    modules swapped for tiny in-memory fakes via `require.cache`
+    injection, since MongoDB is unreachable in this sandbox — same
+    workaround pattern used for every DB-touching test in this project so
+    far) and drove it over real HTTP plus one real Socket.IO client<->
+    server round trip (`socket.io-client` installed transiently via
+    `npm install --no-save --no-package-lock`, used for exactly this test,
+    then removed again — never added to `package.json`/`package-lock.json`,
+    confirmed via `git status`/`git diff --stat` afterward). Covered: Block
+    create-dedup (duplicate `POST` is `200` idempotent, same document, not
+    a new one; self-block and invalid-id `400`), Report reason-enum
+    validation (all 9 real values from `REPORT_REASONS` round-trip
+    correctly; an invalid reason, self-report, and missing reason all
+    `400`), and — the core of this task — bidirectional blocking exclusion
+    end-to-end with a three-user (A/B/C) setup where A blocks B and C is an
+    uninvolved control: B disappears from A's discovery feed AND A
+    disappears from B's feed (C's feed unaffected), the A↔B match
+    disappears from `GET /api/matches` for BOTH A and B (the unrelated A↔C
+    match stays visible for both as a control), `GET`/`POST`-message and
+    `PATCH`-read-receipt all `403` for both A and B on the blocked match
+    (with zero `Message` documents created), a real Socket.IO
+    `match:join` acks `{ok:false}` for both A and B on the blocked match
+    while acking `{ok:true}` on the unaffected A↔C match, and after
+    `DELETE /api/blocks/:userId` the match reappears and messaging/`GET`
+    succeed again (`200`) for both, with a repeat unblock correctly `404`ing.
+  - Frontend `npm run build` and `npm run lint` both pass with the new
+    `SafetyMenu.jsx`/`ReportModal.jsx`/`BlockedUsers.jsx`/`SafetyCenter.jsx`
+    and the Discovery/Chat/Settings/App.jsx wiring; no new lint warnings
+    (the two pre-existing `only-export-components` warnings in
+    `AuthContext.jsx`/`NotificationContext.jsx` are unrelated and already
+    an accepted pattern from prior sessions).
+  - The standalone verification script and the transiently-installed
+    `socket.io-client` package were both removed before committing — same
+    "no scratch/debug files in the tree" convention every prior session on
+    this project has followed; confirmed via `git status`/`git diff --stat`
+    that only intended app-code/doc files are staged.
+  - Not exercised (see PROJECT_STATE.md's Known Technical Debt): real
+    MongoDB persistence of `Block`/`Report` (including the `Block` unique
+    compound index under real concurrent inserts), and anything involving
+    automated abuse detection or file-upload evidence (neither exists —
+    both are intentionally out of scope, see `MOCK_FEATURES.md`).
+- **Next task:** Task #11 — Admin Panel (basic) (see PROJECT_STATE.md's
+  "Next Exact Task" for the full scope breakdown and the note that a
+  TaskList tool was not available in this session to cross-check the
+  internal task graph directly).
+
+---
+
 ## 2026-08-17 — Verification (Task #9) implemented
 
 - **Phase:** Phase 7 — Verification (docs/ROADMAP.md numbering; internal

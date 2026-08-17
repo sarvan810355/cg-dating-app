@@ -103,9 +103,15 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
       `frontend/src/pages/Verification.jsx`)
 
 ### Safety
-- [ ] Report user flow (API + UI)
-- [ ] Block user flow (API + UI)
-- [ ] Safety Center screen
+- [x] Report user flow (`POST /api/reports`; `frontend/src/components/
+      ReportModal.jsx` reached via `SafetyMenu.jsx` from Discovery cards +
+      Chat)
+- [x] Block user flow (`POST`/`DELETE`/`GET /api/blocks`; bidirectional
+      exclusion in discovery/matches/messaging/Socket.IO via
+      `backend/utils/blockUtils.js`; `SafetyMenu.jsx` from Discovery cards +
+      Chat, `frontend/src/pages/BlockedUsers.jsx` for management)
+- [x] Safety Center screen (`frontend/src/pages/SafetyCenter.jsx` — static
+      safety tips/scam-awareness content, reachable from Settings)
 
 ### Admin
 - [ ] Role field on User model (SUPER_ADMIN, ADMIN, MODERATOR, SUPPORT, ANALYST)

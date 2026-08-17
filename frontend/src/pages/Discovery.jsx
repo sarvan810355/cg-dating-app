@@ -4,6 +4,7 @@ import * as api from '../api';
 import Button from '../components/Button';
 import MatchModal from '../components/MatchModal';
 import NotificationBell from '../components/NotificationBell';
+import SafetyMenu from '../components/SafetyMenu';
 import VerificationBadge from '../components/VerificationBadge';
 import { DATING_INTENTIONS } from '../constants/profileOptions';
 
@@ -12,13 +13,16 @@ function intentionLabel(value) {
 }
 
 // Single discovery card: photo, name/age, city, dating-intention chip, bio,
-// and a couple of interests — per docs/DESIGN_SYSTEM.md's ProfileCard.
-function DiscoveryCard({ profile }) {
+// and a couple of interests — per docs/DESIGN_SYSTEM.md's ProfileCard. Also
+// carries the Report/Block entry point (Task #10) as a small overlay menu
+// on the photo, per the task spec's "reachable from a user's profile card"
+// requirement.
+function DiscoveryCard({ profile, onBlocked }) {
   const photo = profile.photos?.find((p) => p.isPrimary)?.url || profile.photos?.[0]?.url;
 
   return (
     <div className="overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
-      <div className="aspect-[4/5] w-full bg-primary-subtle">
+      <div className="relative aspect-[4/5] w-full bg-primary-subtle">
         {photo ? (
           <img
             src={photo}
@@ -30,6 +34,13 @@ function DiscoveryCard({ profile }) {
             {(profile.displayName || '?')[0]}
           </div>
         )}
+        <SafetyMenu
+          variant="overlay"
+          className="absolute right-3 top-3"
+          userId={profile.userId}
+          userName={profile.displayName}
+          onBlocked={onBlocked}
+        />
       </div>
       <div className="p-5">
         <div className="mb-1 flex items-baseline gap-2">
@@ -118,6 +129,14 @@ function Discovery() {
 
   const current = queue[0];
 
+  // Task #10 (Safety — Report/Block): a successful block from the current
+  // card's SafetyMenu removes that person from the queue immediately —
+  // they're excluded server-side from now on anyway, so leaving their card
+  // visible until the next reload would be a confusing UI lie.
+  function handleBlocked(blockedUserId) {
+    setQueue((prev) => prev.filter((p) => p.userId !== blockedUserId));
+  }
+
   async function handleSwipe(action) {
     if (!current || swiping) return;
     setSwiping(true);
@@ -172,7 +191,7 @@ function Discovery() {
 
         {!loading && current && (
           <>
-            <DiscoveryCard profile={current} />
+            <DiscoveryCard profile={current} onBlocked={handleBlocked} />
             <div className="mt-5 flex justify-center gap-4">
               <Button
                 variant="secondary"

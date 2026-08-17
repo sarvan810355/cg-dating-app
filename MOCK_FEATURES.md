@@ -115,6 +115,25 @@ move items to "Resolved" rather than deleting them, so there's a record of what 
       (a per-match latest-message lookup or a denormalized field maintained on `Match`
       when a message is sent). Chat itself is fully functional without this; deferred
       here to keep this task focused on messaging working end-to-end.
+- [ ] **Report evidence is plain strings, no file upload — not a mock, a
+      documented scope reduction.** Task #10's `POST /api/reports`
+      (`backend/routes/reports.js`, `backend/models/Report.js`) accepts an
+      optional `evidence` array, but each entry is just a string (a URL, or a
+      short free-text reference) — there is no image/screenshot upload path
+      for report evidence, unlike `profiles.photos`/`photoVerification`'s
+      (mocked) base64-or-URL path. Nothing here needs replacing later so much
+      as extending, if/when evidence upload is prioritized.
+- [ ] **No automated spam/scam/abuse detection — out of scope for this task,
+      planned as the future "Trust Engine" (V3).** Task #10 (Report/Block,
+      see `docs/ROADMAP.md`'s Phase 8) is entirely manual: a user reports
+      another user, and every report sits `PENDING` until a human moderator
+      acts on it via the future Admin panel (Task #11). There is no
+      automated signal (message-content scanning, image/face-match
+      verification-fraud detection, behavioral pattern flags, repeat-report
+      auto-suspension, etc.) anywhere in this pass — that's the explicitly
+      later-phase "Trust Engine" / AI-assisted moderation concept (V3 scope,
+      see `docs/BUSINESS_PLAN.md`/`docs/ROADMAP.md`), not something this task
+      attempted or partially mocked.
 
 ## Resolved (mocks replaced with real implementations)
 

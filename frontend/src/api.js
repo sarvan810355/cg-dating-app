@@ -195,3 +195,26 @@ export function submitPhotoVerification({ url, imageBase64, mimeType }) {
 export function getVerificationStatus() {
   return request('/api/verification/status', { method: 'GET', auth: true });
 }
+
+// --- Safety: Report / Block (Task #10 in the internal TaskList; = docs/
+// ROADMAP.md's Phase 8) ------------------------------------------------------
+
+export function reportUser(reportedUserId, reason, details) {
+  return request('/api/reports', {
+    method: 'POST',
+    body: { reportedUserId, reason, ...(details ? { details } : {}) },
+    auth: true,
+  });
+}
+
+export function blockUser(blockedUserId) {
+  return request('/api/blocks', { method: 'POST', body: { blockedUserId }, auth: true });
+}
+
+export function unblockUser(userId) {
+  return request(`/api/blocks/${userId}`, { method: 'DELETE', auth: true });
+}
+
+export function getBlockedUsers() {
+  return request('/api/blocks', { method: 'GET', auth: true });
+}

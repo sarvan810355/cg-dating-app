@@ -9,6 +9,8 @@ import Matches from './pages/Matches';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
 import Verification from './pages/Verification';
+import BlockedUsers from './pages/BlockedUsers';
+import SafetyCenter from './pages/SafetyCenter';
 import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
@@ -70,6 +72,22 @@ function App() {
         element={
           <ProtectedRoute>
             <Verification />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings/blocked-users"
+        element={
+          <ProtectedRoute>
+            <BlockedUsers />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/safety-center"
+        element={
+          <ProtectedRoute>
+            <SafetyCenter />
           </ProtectedRoute>
         }
       />

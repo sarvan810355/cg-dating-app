@@ -190,12 +190,12 @@ Base path: `/api/discovery`. All routes require auth. Routes in
   filter on yet; see the `preferences` divergence note in
   `docs/DATABASE_SCHEMA.md`.
 - Excludes: the caller, anyone the caller has already swiped on (like or pass —
-  either decision means "don't show again"), and anyone the caller is already
-  matched with. Profiles missing `displayName`/`dateOfBirth`/`gender` (i.e. not
-  complete enough to be worth showing) are also excluded.
-- **Not yet implemented:** blocking — `backend/routes/discovery.js` has a `TODO`
-  where blocked-user exclusion will go once the Block model exists (Report/Block
-  is a separate, later task; see `TODO.md`).
+  either decision means "don't show again"), anyone the caller is already
+  matched with, and — `[IMPLEMENTED]`, Task #10, see this doc's Safety section
+  below — anyone involved in a block with the caller in **either** direction
+  (someone the caller has blocked, or someone who has blocked the caller).
+  Profiles missing `displayName`/`dateOfBirth`/`gender` (i.e. not complete
+  enough to be worth showing) are also excluded.
 - **Success response:** `200 OK` —
   `{ "profiles": [ <public profile, see docs/API_DOCUMENTATION.md's Profile section> ], "page": 1, "hasMore": true }`
 - **Errors:** `400` — invalid `datingIntention`; `404` — caller has no profile yet
@@ -239,6 +239,11 @@ note below. Routes in `backend/routes/matches.js`.
   with the other participant's basic profile info attached for a match-list card
   (`displayName`, `age`, `city`, `district`, `datingIntention`, primary `photo`
   URL).
+- `[IMPLEMENTED]`, Task #10 (see this doc's Safety section below): a match is
+  also excluded from this list — for **both** participants — while either side
+  has blocked the other. The underlying `Match` document isn't deleted or
+  mutated (unlike unmatch); this is a query-time filter only, so unblocking
+  makes the match reappear exactly as it was.
 - **Success response:** `200 OK` —
   ```json
   {
@@ -273,10 +278,13 @@ Base path: `/api/matches/:matchId/messages` (routes live in `backend/routes/
 matches.js`, alongside match listing), plus Socket.IO events (`backend/
 socket.js`). All routes require auth and require the caller to be one of the
 two users in that match — `403` otherwise, `403` again if the match has been
-unmatched, `404` if `matchId` doesn't resolve to any match. Every text
-message must go through `POST` below — nothing is ever written directly by
-a socket event; see the "REST is the single write path" note under Socket.IO
-events below.
+unmatched, `403` again — `[IMPLEMENTED]`, Task #10, see this doc's Safety
+section below — if either participant has blocked the other (regardless of
+which of the two blocked the other, and regardless of which of the two is
+making the request), `404` if `matchId` doesn't resolve to any match. Every
+text message must go through `POST` below — nothing is ever written directly
+by a socket event; see the "REST is the single write path" note under
+Socket.IO events below.
 
 **Divergence from the original draft:** no `/api/conversations` base path —
 a `Match` already uniquely identifies a two-person conversation, so
@@ -358,10 +366,18 @@ ever create a `Message` document.
 - **`match:join`** (client → server) — `{ matchId }`, with an ack callback
   `(ack) => ...`. Server verifies the connected user is a participant of an
   active (not-unmatched) match with that id (via the same `isParticipant()`
-  helper the REST routes use) and, if so, joins the socket to that match's
-  room (`match:<matchId>`); acks `{ ok: true }` on success or
-  `{ ok: false, message }` otherwise. Must be called before any `message:new`
-  broadcasts for that match will reach this socket.
+  helper the REST routes use) and — `[IMPLEMENTED]`, Task #10 — that neither
+  participant has blocked the other (via the same `isBlockedEitherWay()`
+  helper `loadAuthorizedMatch()` uses for the REST message routes above) and,
+  if both hold, joins the socket to that match's room (`match:<matchId>`);
+  acks `{ ok: true }` on success or `{ ok: false, message }` otherwise. Must
+  be called before any `message:new` broadcasts for that match will reach
+  this socket. Note this gate only stops a *new* `match:join` — it doesn't
+  forcibly evict a socket already sitting in a match's room from before the
+  block took effect; that's not a gap in practice, though, since the REST
+  `POST`/`PATCH` message routes 403 for both participants the instant a
+  block exists, so no new `message:new`/`message:read` broadcast can ever be
+  triggered for that room again regardless of who's still joined to it.
 - **`match:leave`** (client → server) — `{ matchId }`. Leaves the room; no ack.
 - **`message:new`** (server → room) — emitted after a successful
   `POST /api/matches/:matchId/messages`, to every socket joined to that
@@ -477,15 +493,109 @@ selfie (see `backend/utils/verificationUtils.js#toPublicVerificationBadges()`).
 come from `GET /api/verification/status` instead, so verification data isn't
 duplicated across two response shapes.
 
-## 7. Safety (Report / Block) — `[PLANNED]`
+## 7. Safety (Report / Block) — `[IMPLEMENTED]`
 
-Base path: `/api/reports`, `/api/blocks`
+Base path: `/api/reports`, `/api/blocks` (routes in `backend/routes/reports.js`
+and `backend/routes/blocks.js`; models in `backend/models/Report.js` and
+`backend/models/Block.js`; shared enums/config in
+`backend/constants/safetyOptions.js`; the shared "who does this affect"
+helpers in `backend/utils/blockUtils.js`). Frontend: `frontend/src/
+components/SafetyMenu.jsx` (the Report/Block entry point, reused from a
+profile card in Discovery and from the Chat header) + `frontend/src/
+components/ReportModal.jsx`, `frontend/src/pages/BlockedUsers.jsx` (manage
+blocked users, reachable from Settings), `frontend/src/pages/
+SafetyCenter.jsx` (static safety/scam-awareness content, reachable from
+Settings).
 
-- `POST /api/reports` — auth required — body `{ "reportedUserId", "reason", "details" }`.
-- `POST /api/blocks` — auth required — body `{ "blockedUserId" }`; blocked users are
-  excluded from discovery/messaging both ways.
-- `DELETE /api/blocks/:blockedUserId` — auth required — unblock.
-- `GET /api/blocks` — auth required — list users the caller has blocked.
+### `POST /api/reports`
+- **Request body:** `{ "reportedUserId": "...", "reason": "...", "details"?: "...", "evidence"?: ["..."] }`
+- **`reason`** must be one of: `fake_profile`, `harassment`, `spam`, `scam`,
+  `inappropriate_content`, `hate_abuse`, `threats`, `impersonation`, `other`
+  (`backend/constants/safetyOptions.js#REPORT_REASONS`) — a 400 otherwise.
+- **`details`** optional free text, trimmed, capped at 1000 characters.
+- **`evidence`** optional array of strings (a photo/message-reference URL, or
+  a short free-text reference) — capped at 10 entries, 2000 characters each.
+  **MOCK/TEMPORARY:** no file-upload path exists for evidence in this pass —
+  see `MOCK_FEATURES.md`.
+- The reporter is always the authenticated caller, never taken from the
+  client. A report is created `PENDING` and reviewed later by the future
+  Admin moderation queue (Task #11 — see this doc's Admin section); no code
+  path in this pass ever transitions a report away from `PENDING`.
+- Reporting is **not itself a block** — filing a report doesn't stop the
+  reported user from seeing/messaging the reporter; block that user
+  separately (via `POST /api/blocks` below) if that's also wanted, which is
+  exactly what the frontend's Report/Block menu offers as two separate
+  actions.
+- **Success response:** `201 Created` —
+  `{ "report": { "id", "reportedUserId", "reason", "details", "evidence", "status": "PENDING", "createdAt" } }`
+- **Errors:** `400` — invalid/missing `reportedUserId`, invalid `reason`,
+  reporting yourself, `details`/`evidence` over length/count limits; `404` —
+  `reportedUserId` doesn't resolve to a real user; `401`; `500`.
+- **Not implemented:** there is no `GET /api/reports` ("my reports") list in
+  this pass — no screen was asked for one; a report's only client-visible
+  moment is the direct response to this `POST`. The future Admin panel's
+  `GET /api/admin/reports` (Task #11, see this doc's Admin section) is a
+  separate, role-gated endpoint.
+
+### `POST /api/blocks`
+- **Request body:** `{ "blockedUserId": "..." }`
+- Blocking is **one-directional to create** (only the caller decided this —
+  if the blocked user also wants to block back, they create their own
+  separate `Block` document) but its **effects are enforced bidirectionally**
+  at query time, wherever it matters — see "Effects of a block" below.
+- **Idempotent:** blocking someone you already blocked returns `200 OK` with
+  the existing block (not an error) rather than a duplicate document — the
+  `(blocker, blocked)` pair has a unique index.
+- Blocking is **silent** — the blocked user is never notified in any way (no
+  `Notification` document is ever created for a block); per the product
+  spec, only the blocker's own view changes.
+- **Success response:** `201 Created` (or `200 OK` if already blocked) —
+  `{ "block": { "id", "blockedUserId", "createdAt" } }`
+- **Errors:** `400` — invalid/missing `blockedUserId`, blocking yourself;
+  `404` — `blockedUserId` doesn't resolve to a real user; `401`; `500`.
+
+### `DELETE /api/blocks/:userId`
+- Unblocks. Deletes the `Block` document outright (there's no soft-delete /
+  block-history concept — see `backend/models/Block.js`) — this restores
+  full mutual visibility (discovery, matches list, messaging) immediately.
+- **Success response:** `200 OK` — `{ "unblocked": true, "userId": "..." }`
+- **Errors:** `400` — invalid `userId`; `404` — the caller isn't currently
+  blocking that user; `401`; `500`.
+
+### `GET /api/blocks`
+- Lists the caller's own blocked-users, newest first — for the "manage
+  blocked users" screen (`frontend/src/pages/BlockedUsers.jsx`). Not
+  paginated in this pass (a user's own block list is expected to stay
+  small).
+- **Success response:** `200 OK` —
+  `{ "blocks": [ { "blockedUserId", "displayName", "photo", "createdAt" } ] }`
+  (`displayName`/`photo` come from the blocked user's `Profile`, and are
+  `null` if they have none.)
+- **Errors:** `401`; `500`.
+
+### Effects of a block — bidirectional exclusion
+Once a `Block` exists between two users (in either direction), it is
+enforced identically everywhere via the shared
+`backend/utils/blockUtils.js#getBlockedUserIds()` /
+`#isBlockedEitherWay()` helpers:
+- **Discovery feed** (`GET /api/discovery/feed`) — neither user appears in
+  the other's candidate feed.
+- **Matches list** (`GET /api/matches`) — a match between the two is hidden
+  from **both** their lists (the underlying `Match` document itself is
+  untouched — unblocking makes it reappear exactly as it was; this is
+  different from unmatch, which is a separate, permanent action not yet
+  implemented — see this doc's Matching section).
+- **Messaging** (`GET`/`POST /api/matches/:matchId/messages`,
+  `PATCH .../messages/read`) — `403` for both participants on that match,
+  even though the underlying `Match` still exists (defense-in-depth for
+  anyone who already has the `matchId`, e.g. a still-open chat tab).
+- **Socket.IO `match:join`** — acks `{ ok: false }` for that match, so a
+  blocked conversation can't be (re)joined for live delivery either — see
+  this doc's Socket.IO events section.
+- Everything above is **query-time filtering only** — no other collection is
+  mutated when a block is created or removed, so unblocking cleanly restores
+  the prior state (the match reappears, messaging works again) with no data
+  to "undo".
 
 ## 8. Notifications — `[IMPLEMENTED, in-app only — FCM push is MOCK/TEMPORARY-deferred]`
 

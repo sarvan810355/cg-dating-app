@@ -6,6 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import Button from '../components/Button';
 import ChatBubble from '../components/ChatBubble';
+import SafetyMenu from '../components/SafetyMenu';
 
 const TYPING_STOP_DELAY_MS = 1500;
 
@@ -250,6 +251,16 @@ function Chat() {
         <Link to="/matches" className="text-sm text-primary hover:underline">
           Matches
         </Link>
+        {/* Task #10 (Safety — Report/Block): report or block the other
+            person in this match. Blocking navigates away since this
+            conversation will 403 on the very next request/join. */}
+        {otherUser && (
+          <SafetyMenu
+            userId={otherUser.userId}
+            userName={otherUser.displayName}
+            onBlocked={() => navigate('/matches')}
+          />
+        )}
       </header>
 
       {connectionError && (

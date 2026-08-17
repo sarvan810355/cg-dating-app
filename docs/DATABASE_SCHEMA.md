@@ -310,16 +310,79 @@ In-app notifications (this collection + the socket event + the frontend
 bell/dropdown) are fully real; only off-app push delivery to a device that
 doesn't have the app open is deferred. See `MOCK_FEATURES.md`.
 
-### `reports`
-- `_id`, `reporterId` (ref `users`), `reportedUserId` (ref `users`, indexed),
-  `reason` (enum), `details`, `status` (`OPEN`, `IN_REVIEW`, `RESOLVED`, `DISMISSED`),
-  `createdAt`, `resolvedAt`, `resolvedBy` (ref `users`, admin)
-- Indexes: index on `status`; index on `reportedUserId`.
+### `reports` — `[IMPLEMENTED, with divergences from the original draft below]`
+Implemented in `backend/models/Report.js`; routes in
+`backend/routes/reports.js`; the `reason`/`status` enums and evidence limits
+live in `backend/constants/safetyOptions.js` (Task #10, see
+`docs/ROADMAP.md`'s Phase 8).
 
-### `blocks`
-- `_id`, `blockerId` (ref `users`, indexed), `blockedUserId` (ref `users`, indexed),
-  `createdAt`
-- Indexes: unique compound on `(blockerId, blockedUserId)`.
+**Divergences from the original draft:** field names are `reporter`/
+`reportedUser` (not `reporterId`/`reportedUserId` — matches this codebase's
+existing `Like`/`Match` naming, which drops the `Id` suffix on ref fields);
+`status` enum is `PENDING`/`REVIEWED`/`ACTION_TAKEN`/`DISMISSED` (not the
+draft's `OPEN`/`IN_REVIEW`/`RESOLVED`/`DISMISSED`) — `PENDING` is every
+report's starting state, matching this codebase's other "just created, needs
+action" defaults (`Notification.read: false`, `photoVerification.status`);
+`resolvedAt`/`resolvedBy` are named `reviewedAt`/`reviewedBy` for the same
+reason. An `evidence` field was added beyond the original draft (not
+present in it at all) — see below.
+
+- `_id`
+- `reporter` (ref `users`, required) — always the authenticated caller, never
+  taken from client input.
+- `reportedUser` (ref `users`, required, indexed)
+- `reason` — enum: `fake_profile`, `harassment`, `spam`, `scam`,
+  `inappropriate_content`, `hate_abuse`, `threats`, `impersonation`, `other`
+  (required)
+- `details` — free text, trimmed, optional, capped at 1000 characters
+  (`REPORT_DETAILS_MAX_LENGTH`), enforced at the route layer
+- `evidence` — array of strings (a photo/message-reference URL, or a short
+  free-text reference), optional, capped at 10 entries / 2000 characters
+  each (`MAX_EVIDENCE_ITEMS`/`EVIDENCE_ITEM_MAX_LENGTH`). **MOCK/TEMPORARY:**
+  plain strings only — no file-upload path exists for report evidence in
+  this pass, see `MOCK_FEATURES.md`.
+- `status` — enum: `PENDING` (default), `REVIEWED`, `ACTION_TAKEN`,
+  `DISMISSED`. No code path in this pass ever transitions a report away from
+  `PENDING` — that's the future Admin moderation queue's job (Task #11, see
+  `docs/API_DOCUMENTATION.md`'s Admin section).
+- `reviewedAt` (`Date`, null until a moderator acts on it — not set by
+  anything in this pass)
+- `reviewedBy` (ref `users`, admin; null until reviewed — not set by
+  anything in this pass)
+- `reviewNotes` `[NEVER EXPOSED]` — private moderation notes; `select: false`
+  on the schema so a default `Report.find()`/`findById()` never loads it, on
+  top of the global field-level access rule at the top of this document.
+- `createdAt` only (no `updatedAt`) — a report's moderation outcome lives in
+  the separate, deliberately-nullable `reviewedAt`, same choice already made
+  for `Like`/`Notification`.
+- Indexes: `{ status: 1, createdAt: -1 }` (the future Admin queue's real
+  access pattern: "reports in this status, newest first"); `{ reportedUser: 1 }`
+  ("all reports filed against this user").
+
+### `blocks` — `[IMPLEMENTED]`
+Implemented in `backend/models/Block.js`; routes in
+`backend/routes/blocks.js`; the bidirectional-exclusion effects (discovery
+feed, matches list, messaging authorization, Socket.IO `match:join`) are
+centralized in `backend/utils/blockUtils.js` and documented in full in
+`docs/API_DOCUMENTATION.md`'s Safety section (Task #10, see
+`docs/ROADMAP.md`'s Phase 8).
+
+- `_id`
+- `blocker` (ref `users`, required) — who took the block action.
+- `blocked` (ref `users`, required) — who got blocked.
+- `createdAt` only (no `updatedAt`) — a block is a point-in-time decision;
+  unblocking deletes the document (`DELETE /api/blocks/:userId`) rather than
+  flipping a flag, so there's no "history of past blocks" to track.
+- Indexes: `{ blocker: 1, blocked: 1 }` unique (prevents a duplicate block
+  for the same pair — a repeat `POST /api/blocks` is idempotent, not an
+  error, see `docs/API_DOCUMENTATION.md`); `{ blocked: 1 }` ("who has blocked
+  me" — the other half of the bidirectional exclusion rule).
+- **Design note:** blocking is one-directional *to create* — only `blocker`
+  decided this; if the blocked user also wants to block back, they create
+  their own separate `Block` document. The *effects* of a block are applied
+  bidirectionally at query time wherever it matters, rather than by mutating
+  any other collection (`Match`, etc.) — see `docs/API_DOCUMENTATION.md`'s
+  Safety section for the full list of affected surfaces.
 
 ### `verifications` — `[IMPLEMENTED, with divergences from the original draft below]`
 Implemented in `backend/models/User.js` (see the `users` section above);

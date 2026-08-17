@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 
 const { verifyToken } = require('./middleware/auth');
 const Match = require('./models/Match');
-const { isParticipant } = require('./utils/matchUtils');
+const { isParticipant, otherParticipant } = require('./utils/matchUtils');
+const { isBlockedEitherWay } = require('./utils/blockUtils');
 
 // Room naming: one room per match, shared with backend/routes/matches.js
 // (the message routes emit into this same room after a REST write) so the
@@ -100,6 +101,22 @@ function initSocket(httpServer) {
 
         const match = await Match.findById(matchId);
         if (!match || match.unmatched || !isParticipant(match, socket.user.id)) {
+          if (typeof ack === 'function') {
+            ack({ ok: false, message: 'Not authorized for this match' });
+          }
+          return;
+        }
+
+        // Task #10 (Safety — Report/Block, see docs/ROADMAP.md's Phase 8):
+        // same block check as the REST message routes'
+        // loadAuthorizedMatch() (backend/routes/matches.js) — a blocked
+        // conversation can't be joined for live delivery either, so a
+        // socket that was already connected before a block took effect
+        // can't keep receiving `message:new`/`typing` for it after the
+        // fact (REST is still the only path that can ever persist a
+        // Message, so this alone fully closes the loop).
+        const other = otherParticipant(match, socket.user.id);
+        if (await isBlockedEitherWay(socket.user.id, other)) {
           if (typeof ack === 'function') {
             ack({ ok: false, message: 'Not authorized for this match' });
           }

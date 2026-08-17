@@ -136,6 +136,20 @@ function Settings() {
           </Button>
         </Link>
 
+        {/* Task #10 (Safety — Report/Block + Safety Center, see
+            docs/ROADMAP.md's Phase 8). */}
+        <Link to="/safety-center">
+          <Button variant="ghost" className="mt-2 w-full">
+            Safety Center
+          </Button>
+        </Link>
+
+        <Link to="/settings/blocked-users">
+          <Button variant="ghost" className="mt-2 w-full">
+            Blocked Users
+          </Button>
+        </Link>
+
         <Link to="/dashboard">
           <Button variant="ghost" className="mt-2 w-full">
             Back to Dashboard
