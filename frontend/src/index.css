@@ -1,1 +1,70 @@
 @import "tailwindcss";
+
+/*
+ * Design tokens — see docs/DESIGN_SYSTEM.md for the source palette.
+ * Light values live on :root; dark values override the same custom
+ * properties under a prefers-color-scheme query (dark mode is designed
+ * intentionally here, not derived by inverting light values — see the doc).
+ * @theme maps each CSS variable to a Tailwind color utility (e.g.
+ * --color-primary => bg-primary/text-primary/border-primary, etc.).
+ */
+:root {
+  --color-primary: #e11d48;
+  --color-primary-hover: #be123c;
+  --color-primary-subtle: #ffe4e9;
+  --color-secondary: #d9a47a;
+  --color-background: #fffbf9;
+  --color-surface: #ffffff;
+  --color-border: #ede3de;
+  --color-text-primary: #1f1315;
+  --color-text-secondary: #6b5a57;
+  --color-success: #15803d;
+  --color-success-subtle: #dcfce7;
+  --color-warning: #d97706;
+  --color-warning-subtle: #fef3c7;
+  --color-error: #dc2626;
+  --color-error-subtle: #fee2e2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-primary: #fb7185;
+    --color-primary-hover: #f43f5e;
+    --color-primary-subtle: #3b1420;
+    --color-secondary: #e3b993;
+    --color-background: #161012;
+    --color-surface: #201a1c;
+    --color-border: #332a2c;
+    --color-text-primary: #f5eeec;
+    --color-text-secondary: #b7a6a2;
+    --color-success: #4ade80;
+    --color-success-subtle: #14532d;
+    --color-warning: #fbbf24;
+    --color-warning-subtle: #451a03;
+    --color-error: #f87171;
+    --color-error-subtle: #450a0a;
+  }
+}
+
+@theme inline {
+  --color-primary: var(--color-primary);
+  --color-primary-hover: var(--color-primary-hover);
+  --color-primary-subtle: var(--color-primary-subtle);
+  --color-secondary: var(--color-secondary);
+  --color-background: var(--color-background);
+  --color-surface: var(--color-surface);
+  --color-border: var(--color-border);
+  --color-text-primary: var(--color-text-primary);
+  --color-text-secondary: var(--color-text-secondary);
+  --color-success: var(--color-success);
+  --color-success-subtle: var(--color-success-subtle);
+  --color-warning: var(--color-warning);
+  --color-warning-subtle: var(--color-warning-subtle);
+  --color-error: var(--color-error);
+  --color-error-subtle: var(--color-error-subtle);
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text-primary);
+}

@@ -15,19 +15,26 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
 - [ ] Rate limiting on auth endpoints
 
 ### Profile
-- [ ] Profile Mongoose schema (full fields, see docs/DATABASE_SCHEMA.md)
-- [ ] Multi-step profile builder UI (basic info, DOB, gender, dating preference,
+- [x] Profile Mongoose schema (full fields, see docs/DATABASE_SCHEMA.md)
+- [x] Multi-step profile builder UI (basic info, DOB, gender, dating preference,
       dating intention, location, profession, education, interests, prompts)
-- [ ] Photo upload (Cloudinary integration)
-- [ ] Bio + interests + prompts editing
-- [ ] Preferences (age range, distance, gender preference, dating intention filter)
-- [ ] Profile strength / completeness score
-- [ ] Profile view (own + others')
+- [x] Photo upload — MOCK/TEMPORARY (URL or base64 stored directly on the profile
+      doc; real Cloudinary integration still not wired up, see MOCK_FEATURES.md)
+- [x] Bio + interests + prompts editing
+- [ ] Preferences (age range, distance, gender preference, dating intention filter) —
+      deferred to Task #4 (Discovery); `interestedIn`/`datingIntention` already live
+      on the Profile itself
+- [x] Profile strength / completeness score (`profileCompletionPercentage` +
+      `completionHints`, computed server-side)
+- [x] Profile view (own via `GET /api/profile/me`, others' public view via
+      `GET /api/profile/:userId`)
 
 ### Location
-- [ ] City/district capture (not exact address) — must support all CG districts/towns,
-      not just major cities
-- [ ] Location-based query support (2dsphere index)
+- [x] City/district capture (not exact address) — district is free text, supports
+      any CG district/town, not just major cities
+- [ ] Location-based query support (2dsphere index) — index exists on
+      `profiles.location`, but no UI/route populates or queries it yet; deferred to
+      Task #4 (Discovery)
 
 ### Discovery
 - [ ] Discovery feed API with pagination

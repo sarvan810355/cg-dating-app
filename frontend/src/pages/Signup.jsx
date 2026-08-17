@@ -17,7 +17,8 @@ function Signup() {
     setSubmitting(true);
     try {
       await signup(email, password);
-      navigate('/dashboard');
+      // A brand-new account never has a profile yet, straight to the builder.
+      navigate('/profile/edit');
     } catch (err) {
       setError(err.message || 'Something went wrong. Please try again.');
     } finally {

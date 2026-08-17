@@ -79,23 +79,99 @@ Base path: `/api/auth`
 
 ---
 
-## 2. Profile — `[PLANNED]`
+## 2. Profile — `[IMPLEMENTED]`
 
-Base path: `/api/profile`
+Base path: `/api/profile`. All routes require auth (`Authorization: Bearer <JWT>`),
+including viewing another user's profile — there is no unauthenticated profile
+browsing in this app.
 
-- `GET /api/profile/me` — auth required — returns the caller's full profile (including
-  fields hidden from other users, e.g. exact preferences).
-- `PUT /api/profile/me` — auth required — create/update profile fields (name, dob,
-  gender, dating intention, bio, city/district, profession, education, interests,
-  prompts).
-- `GET /api/profile/:userId` — auth required — returns another user's public profile
-  view (sensitive fields stripped per `docs/DATABASE_SCHEMA.md`).
-- `POST /api/profile/photos` — auth required — upload a photo (multipart -> Cloudinary),
-  returns photo record.
-- `DELETE /api/profile/photos/:photoId` — auth required, must own the photo.
-- `PUT /api/profile/preferences` — auth required — update discovery preferences.
-- All responses wrap the resource as `{ "profile": { ... } }` or `{ "photo": { ... } }`;
-  errors follow the standard error format above.
+### `GET /api/profile/me`
+- Returns the caller's own full profile.
+- `404` if the caller has not created a profile yet (`{ "message": "Profile not
+  found. Create your profile first." }`) — the frontend treats this as "send the
+  user to the profile builder".
+- **Success response:** `200 OK` — `{ "profile": { ... } }`, see field list below.
+
+### `PUT /api/profile/me`
+- Creates the profile on first call, updates it (partial merge) on subsequent calls —
+  this is what lets the multi-step builder save one section at a time.
+- **First-time creation only:** `displayName`, `dateOfBirth`, `gender` are required
+  together in that first request. All other fields, and all fields on later updates,
+  are optional/partial.
+- **Request body (all optional except noted above):**
+  ```json
+  {
+    "displayName": "Anjali",
+    "dateOfBirth": "1998-04-12",
+    "gender": "female",
+    "interestedIn": ["male"],
+    "datingIntention": "serious_dating",
+    "city": "Bhilai",
+    "district": "Durg",
+    "profession": "Software Engineer",
+    "education": "B.Tech",
+    "bio": "...",
+    "interests": ["Cricket", "Cooking"],
+    "languages": ["Hindi", "Chhattisgarhi"],
+    "lifestyle": { "smoking": "no", "drinking": "socially", "diet": "vegetarian" },
+    "personalityPrompts": [{ "prompt": "My love language is...", "answer": "..." }]
+  }
+  ```
+- **Validation:**
+  - `dateOfBirth` must compute to an age of 18 or older (checked against whatever
+    the effective date of birth is after merging with the existing profile) — `400`
+    if under 18, this is a hard safety requirement.
+  - `gender` must be one of `male`, `female`, `non_binary`, `other`.
+  - `interestedIn` values must be from the same set plus `everyone`.
+  - `datingIntention` must be one of `long_term`, `serious_dating`, `marriage`,
+    `casual`, `friendship`, `new_people` (see divergence note in
+    `docs/DATABASE_SCHEMA.md`).
+  - `district` is free text (any current or future Chhattisgarh district/town is
+    accepted) — not a closed dropdown of major cities only.
+  - `bio` max 500 chars; `interests` max 15 entries; `languages` unlimited;
+    `personalityPrompts` max 5 entries, `prompt` must be from the fixed prompt bank
+    (`backend/constants/profileOptions.js`), `answer` max 300 chars, no duplicate
+    prompts.
+- **Success response:** `200 OK` (update) or `201 Created` (first creation) —
+  `{ "profile": { ... } }`.
+- **Errors:** `400` — validation failure (`{ "message", "errors": [...] }` with all
+  failing fields); `401` — unauthenticated; `409` — duplicate profile race; `500`.
+
+### `GET /api/profile/:userId`
+- Returns another user's **public** profile view — a smaller field set than
+  `GET /me`: no `profileCompletionPercentage`/`completionHints`, no exact geo
+  coordinates (only `city`/`district`), no `dateOfBirth` (only the derived `age`).
+- **Errors:** `400` — `userId` is not a valid id; `404` — no profile for that user.
+
+### `POST /api/profile/me/photos`
+- Adds a photo to the caller's own profile (max 6 photos). The first photo added
+  becomes `isPrimary`.
+- **MOCK/TEMPORARY:** no Cloudinary integration yet — see `MOCK_FEATURES.md`. Accepts
+  **either**:
+  - `{ "url": "https://..." }` — a real external image URL, or an already-formed
+    `data:image/...;base64,...` URI, **or**
+  - `{ "imageBase64": "<base64>", "mimeType": "image/jpeg" }` — raw base64 image
+    data, which the server wraps into a `data:` URI and stores directly on the
+    profile document (no file goes to disk or any object store).
+- **Errors:** `400` — invalid/missing `url`/`imageBase64`, or already at the 6-photo
+  cap; `404` — caller has no profile yet.
+- **Success response:** `201 Created` — `{ "photo": { "id", "url", "isPrimary" },
+  "profile": { ... } }`.
+
+### Full own-profile field list (`GET/PUT /api/profile/me` response `profile`)
+`id`, `userId`, `displayName`, `dateOfBirth`, `age` (derived, never stored/editable
+directly), `gender`, `interestedIn`, `datingIntention`, `city`, `district`, `state`,
+`profession`, `education`, `bio`, `interests`, `languages`, `lifestyle`,
+`personalityPrompts`, `photos` (`[{ id, url, isPrimary }]`), `profileCompletionPercentage`
+(0-100, recomputed server-side on every save), `completionHints` (array of short
+strings, most-impactful first, e.g. `"Add a bio to improve your profile"`),
+`createdAt`, `updatedAt`.
+
+### Not yet implemented (moved out of this phase)
+- `PUT /api/profile/preferences` and a dedicated `preferences` collection — folded
+  into Task #4 (Discovery), not built in the profile phase.
+- `DELETE /api/profile/me/photos/:photoId` — photo removal — not built yet, only
+  add is implemented.
 
 ## 3. Discovery — `[PLANNED]`
 

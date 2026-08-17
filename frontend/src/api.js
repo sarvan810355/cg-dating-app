@@ -50,3 +50,23 @@ export function login(email, password) {
 export function getMe() {
   return request('/api/auth/me', { method: 'GET', auth: true });
 }
+
+export function getMyProfile() {
+  return request('/api/profile/me', { method: 'GET', auth: true });
+}
+
+export function saveMyProfile(fields) {
+  return request('/api/profile/me', { method: 'PUT', body: fields, auth: true });
+}
+
+export function getUserProfile(userId) {
+  return request(`/api/profile/${userId}`, { method: 'GET', auth: true });
+}
+
+export function addProfilePhoto({ url, imageBase64, mimeType }) {
+  return request('/api/profile/me/photos', {
+    method: 'POST',
+    body: url ? { url } : { imageBase64, mimeType },
+    auth: true,
+  });
+}

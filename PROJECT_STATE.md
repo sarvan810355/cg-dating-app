@@ -1,20 +1,20 @@
 Project: CG-Dating-App
-Current Phase: Phase 1 — Authentication + User System
-Current Task: Implement signup/login/JWT (in progress by a parallel agent)
-Completed Features: Project scaffold (Express backend, React/Vite/Tailwind frontend, Mongoose placeholder models, README, .gitignore) — commit fd72a17
-Features In Progress: Authentication (signup, login, JWT, protected /me route)
-Remaining Features: Profile system, Discovery, Matching, Chat, Notifications, Verification, Report/Block/Safety Center, Admin panel, Subscription, AI features, Safe Date, Events, Analytics, Security hardening, Testing, Deployment
+Current Phase: Phase 1 — Authentication + User System, transitioning into Phase 2 — Profile System (complete)
+Current Task: Task #3 (Profile system) implemented and verified where possible in this sandbox
+Completed Features: Project scaffold (Express backend, React/Vite/Tailwind frontend, Mongoose placeholder models, README, .gitignore) — commit fd72a17; Authentication (signup/login/JWT, protected /me) — commit 3f440ca; Profile system (model, CRUD API, completion score, multi-step builder UI) — see this entry's commit
+Features In Progress: None currently in flight
+Remaining Features: Discovery, Matching (Like/Pass), Chat, Notifications, Verification, Report/Block/Safety Center, Admin panel, Subscription, AI features, Safe Date, Events, Analytics, Security hardening, Testing, Deployment
 Known Bugs: None recorded yet — see BUGS.md
-Known Technical Debt: MongoDB connection is not yet verified against a live database in this sandbox; Cloudinary/Firebase/Razorpay/Claude API integrations not yet configured (no credentials yet)
-Last Successful Test: Backend server starts cleanly and frontend builds cleanly (verified during scaffold, commit fd72a17)
-Last Modified Files: backend/routes/auth.js, backend/middleware/auth.js, frontend/src/context/AuthContext.jsx, frontend/src/pages/Login.jsx, frontend/src/pages/Signup.jsx (see git log for latest)
-Database Status: MongoDB/Mongoose schemas scaffolded (placeholder), no live DB connection configured yet
-Backend Status: Express skeleton running, auth routes being added
-Frontend Status: Landing page live, auth pages being added
-Authentication Status: In progress (signup/login/JWT/me endpoint)
+Known Technical Debt: MongoDB connection is still not verified against a live database in this sandbox (no mongod/Docker/network access to MongoDB binaries available here — see IMPLEMENTATION_PROGRESS.md for what was and wasn't verifiable); Cloudinary/Firebase/Razorpay/Claude API integrations not yet configured (no credentials yet); photo storage is a MOCK/TEMPORARY path (base64/URL stored directly on the profile doc) until Cloudinary is wired up — see MOCK_FEATURES.md
+Last Successful Test: Backend server boots cleanly with the new /api/profile routes wired in and no syntax/import errors; profile logic (age calculation, 18+ enforcement, completion-score calculation, completion hints) verified with standalone Node scripts; frontend `npm run build` and `npm run lint` both pass with the new Profile pages/components. DB-touching endpoints could not be exercised end-to-end (see Known Technical Debt).
+Last Modified Files: backend/models/Profile.js, backend/routes/profile.js, backend/constants/profileOptions.js, backend/utils/profileUtils.js, backend/server.js, frontend/src/pages/ProfileBuilder.jsx, frontend/src/pages/Dashboard.jsx, frontend/src/pages/Login.jsx, frontend/src/pages/Signup.jsx, frontend/src/components/Button.jsx, frontend/src/components/TextField.jsx, frontend/src/components/Avatar.jsx, frontend/src/constants/profileOptions.js, frontend/src/api.js, frontend/src/App.jsx, frontend/src/index.css, docs/DATABASE_SCHEMA.md, docs/API_DOCUMENTATION.md, MOCK_FEATURES.md (see git log for the latest)
+Database Status: MongoDB/Mongoose schemas implemented for User + Profile (Profile fully fleshed out per docs/DATABASE_SCHEMA.md, with documented divergences); no live DB connection has ever been verified in any sandbox session so far — this remains the top technical-debt item blocking real end-to-end testing
+Backend Status: Express server running with auth + profile routes; GET/PUT /api/profile/me, GET /api/profile/:userId, POST /api/profile/me/photos all implemented and auth-protected
+Frontend Status: Landing, auth pages, dashboard (now shows profile completion + CTA), and a new multi-step Profile Builder page (create + edit, same component) are all live; design-system color tokens (light + dark, from docs/DESIGN_SYSTEM.md) wired into Tailwind v4 via frontend/src/index.css; Button/TextField/Avatar reusable components started under frontend/src/components/
+Authentication Status: Implemented (signup/login/JWT/me endpoint) — unchanged in this session
 AI Status: Not started (planned: Claude API, backend-only)
 Payment Status: Not started (planned: Razorpay, configurable plans)
 Admin Status: Not started
 Deployment Status: Not started (planned: Render/Railway + MongoDB Atlas + Vercel/Netlify + Cloudinary)
-Next Exact Task: Once auth is confirmed complete and pushed, implement the Profile model (full fields per docs/DATABASE_SCHEMA.md) plus profile create/edit API and multi-step profile builder UI (task #3 in the project task list)
-Next Recommended Action: Verify the auth agent's commit builds and the signup->login->/me flow works, then start Task #3 (Profile system)
+Next Exact Task: Task #4 — Discovery + Matching: discovery feed API (pagination, filters by age range/distance/dating intention), Like/Pass API, mutual-like match detection + match creation, discovery feed UI, and the `preferences` collection deferred from the Profile phase (see docs/DATABASE_SCHEMA.md's `preferences` section)
+Next Recommended Action: Start Task #4. Before building matching logic, get a real MongoDB connection verified in whatever environment will run this next (this sandbox could not reach any MongoDB — no local mongod, no Docker daemon, and mongodb-memory-server's binary download was blocked by the outbound proxy) so Discovery's geo/filter queries can actually be tested end-to-end instead of only via server-boot + pure-logic checks.

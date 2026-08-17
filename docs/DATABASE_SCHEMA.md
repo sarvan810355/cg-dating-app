@@ -27,40 +27,89 @@ Core account/auth record.
 - `createdAt`, `updatedAt`, `lastLoginAt`
 - Indexes: unique on `phone`; unique+sparse on `email`; index on `role` (admin queries).
 
-### `profiles`
-Public-facing dating profile, 1:1 with `users`.
-- `_id`, `userId` (ref `users`, unique, indexed)
-- `displayName`, `dob` (age derived server-side), `gender`
-- `datingIntention` — enum: `DATING`, `SERIOUS_RELATIONSHIP`, `MARRIAGE`, `FRIENDSHIP` — first-class matching field
-- `bio`
-- `city`, `district`, `state` (default `Chhattisgarh`), `location` (GeoJSON `Point`) — city/district only, never exact address
+### `profiles` — `[IMPLEMENTED, with divergences from the original draft below]`
+Public-facing dating profile, 1:1 with `users`. Implemented in
+`backend/models/Profile.js`; routes in `backend/routes/profile.js`.
+- `_id`, `user` (ref `users`, unique, indexed — field is named `user`, not `userId`,
+  to match the existing `User`/`Profile` ref convention already in the codebase)
+- `displayName`, `dateOfBirth` (age derived server-side via a virtual + a
+  request-time helper — never stored as a separately editable "age" field), `gender`
+  — enum: `male`, `female`, `non_binary`, `other`
+- `interestedIn` (array, "who they want to meet") — enum: same as `gender` plus
+  `everyone`
+- `datingIntention` — enum: `long_term`, `serious_dating`, `marriage`, `casual`,
+  `friendship`, `new_people` — first-class matching field.
+  **Divergence from the original draft:** this replaces the earlier planned enum
+  (`DATING`, `SERIOUS_RELATIONSHIP`, `MARRIAGE`, `FRIENDSHIP`) — the implemented
+  list matches the actual product spec for Task #3 (adds `casual` and
+  `new_people`, renames `DATING`→`long_term`/`casual` split). Update any future
+  code that still assumes the old 4-value enum.
+- `bio` (max 500 chars)
+- `city`, `district` (free text — supports any Chhattisgarh district/town, not a
+  closed list; see `backend/constants/profileOptions.js` for the *suggested*,
+  non-exhaustive `CG_DISTRICTS` list used only as UI autocomplete), `state`
+  (default `Chhattisgarh`), `location` (GeoJSON `Point`, optional, not yet
+  populated by any UI — reserved for Task #4 discovery) — city/district only,
+  never exact address
 - `profession`, `education`
-- `interestIds` (ref `interests`, array)
-- `promptAnswers` (array of `{ promptId (ref prompts), answer }`)
-- `profileStrengthScore` (computed)
-- `isPrimaryPhotoVerified` (denormalized from `verifications` for fast reads)
+- `interests` (array of free strings, max 15).
+  **Divergence:** implemented as free strings directly on the profile rather than
+  `interestIds` referencing a separate `interests` lookup collection — simpler for
+  MVP; a shared lookup collection can be introduced later without an API shape
+  change (the field is still just called `interests`).
+- `languages` (array of free strings) — **new field**, not in the original draft;
+  added per the Task #3 product spec.
+- `lifestyle` (object: `{ smoking, drinking, diet }`, each an optional small enum)
+  — **new field**, not in the original draft; added per the Task #3 product spec.
+- `personalityPrompts` (array of `{ prompt, answer }`, max 5).
+  **Divergence:** `prompt` is validated against a fixed in-code prompt bank
+  (`PERSONALITY_PROMPTS` in `backend/constants/profileOptions.js`) rather than a
+  `promptId` reference into a separate `prompts` collection — same simplification
+  rationale as `interests` above.
+- `photos` (array of `{ url, isPrimary, addedAt }`, max 6, embedded directly in
+  the profile document).
+  **Divergence:** embedded on `profiles` rather than a separate top-level `photos`
+  collection — simpler for MVP and matches the mock (non-Cloudinary) storage path;
+  see `MOCK_FEATURES.md`. No `thumbnailUrl`, `order`, or `moderationStatus` yet —
+  can be added when real Cloudinary + moderation land.
+- `profileCompletionPercentage` (computed, 0-100, recomputed server-side on every
+  save — see `backend/utils/profileUtils.js`). Named `profileCompletionPercentage`
+  rather than the originally drafted `profileStrengthScore` (same concept).
+- `isPrimaryPhotoVerified` — **not yet implemented**; deferred until the
+  Verification feature (photo/selfie verification) lands.
 - `createdAt`, `updatedAt`
-- Indexes: unique on `userId`; `2dsphere` on `location`; compound index on
+- Indexes: unique on `user`; `2dsphere` on `location`; compound index on
   `(datingIntention, district)` for discovery filtering.
 
-### `photos`
+### `photos` — **not implemented as a separate collection**
+See the `profiles.photos` divergence note above — photos are embedded on the
+profile document for MVP instead of living in their own collection. This section
+is kept here as the target shape if/when photos are split out (e.g. once
+per-photo moderation status is needed).
 - `_id`, `userId` (ref `users`, indexed), `url` (Cloudinary), `thumbnailUrl`, `order`,
   `isPrimary` (bool), `moderationStatus` (`PENDING`, `APPROVED`, `REJECTED`), `createdAt`
 - Indexes: `(userId, order)`.
 
-### `interests`
-Reference/lookup list (e.g. "Cricket", "Cooking", "Traveling").
+### `interests` — **not implemented as a separate collection**
+See the `profiles.interests` divergence note above — kept as free strings on the
+profile for MVP. This section is kept as the target shape if a shared lookup list
+is introduced later (e.g. for interest-based discovery filtering/autocomplete).
 - `_id`, `name` (unique), `category`, `isActive`
 - Indexes: unique on `name`.
 
-### `preferences`
-Discovery/matching preferences, 1:1 with `users`.
+### `preferences` — `[PLANNED]`, deferred to Task #4 (Discovery)
+Discovery/matching preferences, 1:1 with `users`. Not part of the Task #3 (Profile)
+implementation — `interestedIn` (who to meet) lives on `profiles` instead, but the
+numeric filters below (age range, distance, etc.) are discovery-time concerns and
+will land with Task #4.
 - `_id`, `userId` (ref `users`, unique), `ageMin`, `ageMax`, `genderPreference`,
   `distanceKm`, `datingIntentionFilter`, `showMeOnDiscovery` (bool)
 - Indexes: unique on `userId`.
 
-### `prompts`
-Personality prompt bank (e.g. "My ideal weekend...").
+### `prompts` — **not implemented as a separate collection**
+See the `profiles.personalityPrompts` divergence note above — the prompt bank is
+a fixed in-code list (`backend/constants/profileOptions.js`) for MVP rather than
+an admin-editable collection.
 - `_id`, `text`, `category`, `isActive`
 - Indexes: index on `isActive`.
 

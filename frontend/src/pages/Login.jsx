@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { getMyProfile } from '../api';
 
 function Login() {
   const { login } = useAuth();
@@ -17,7 +18,14 @@ function Login() {
     setSubmitting(true);
     try {
       await login(email, password);
-      navigate('/dashboard');
+      // No profile yet -> send the user to the profile builder first;
+      // otherwise go straight to the dashboard.
+      try {
+        await getMyProfile();
+        navigate('/dashboard');
+      } catch {
+        navigate('/profile/edit');
+      }
     } catch (err) {
       setError(err.message || 'Something went wrong. Please try again.');
     } finally {

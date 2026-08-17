@@ -11,9 +11,17 @@ move items to "Resolved" rather than deleting them, so there's a record of what 
       startup if `MONGODB_URI` is missing or unreachable in this sandbox; no real database
       (local or Atlas) has been provisioned/verified yet. Any route that touches the DB will
       not work correctly until a real connection is configured and verified.
-- [ ] **Cloudinary (media storage) — no credentials configured.** Photo upload UI/API is not
-      implemented yet; when it is, it must use Cloudinary rather than storing files in
-      MongoDB or on local disk. No account/keys exist yet.
+- [ ] **Cloudinary (media storage) — no credentials configured.** `POST
+      /api/profile/me/photos` (`backend/routes/profile.js`) is implemented as a
+      MOCK/TEMPORARY stand-in: it accepts either a real external `url` string, or
+      `imageBase64` (+ `mimeType`) which the server wraps into a `data:image/...;base64,...`
+      URI and stores **directly on the `profiles.photos` array in MongoDB** — no file
+      ever goes to disk or any object store, and no moderation/resizing/thumbnailing
+      happens. This means large photo libraries will bloat the `profiles` collection
+      and there is no CDN delivery. Replace with real Cloudinary upload (multipart ->
+      Cloudinary -> store the returned secure URL only) before this ships to real
+      users; when that happens, also revisit `backend/server.js`'s bumped 10mb JSON
+      body limit (added only to allow base64 payloads through this mock path).
 - [ ] **Firebase Cloud Messaging (push notifications) — no credentials configured.** Not
       implemented yet.
 - [ ] **Razorpay (payments/subscriptions) — no credentials configured.** Subscription plans
