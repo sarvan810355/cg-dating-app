@@ -20,6 +20,13 @@ function toPublicUser(user) {
   return {
     id: user._id,
     email: user.email,
+    // Task #11 — Admin panel: exposing the caller's own role here (not just
+    // via a separate admin-only endpoint) is what lets the frontend's
+    // role-gated /admin section (frontend/src/components/AdminRoute.jsx)
+    // decide whether to show/allow it at all, reusing the same GET
+    // /api/auth/me call frontend/src/context/AuthContext.jsx already makes
+    // on every page load — no second "am I an admin" request needed.
+    role: user.role,
     createdAt: user.createdAt,
   };
 }
@@ -80,6 +87,18 @@ router.post('/login', async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    // Task #11 — Admin panel: a suspended account is blocked at login.
+    // Checked AFTER the password match (not before) so a wrong-password
+    // attempt against a suspended account still gets the generic "Invalid
+    // email or password" message — same anti-enumeration reasoning already
+    // used for the email/password check above, extended to not leak
+    // suspension status to someone who doesn't actually know the password.
+    if (user.accountStatus === 'SUSPENDED') {
+      return res.status(403).json({
+        message: 'Your account has been suspended. Contact support if you believe this is a mistake.',
+      });
     }
 
     user.lastLoginAt = new Date();

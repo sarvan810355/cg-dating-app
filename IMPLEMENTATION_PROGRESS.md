@@ -10,6 +10,202 @@ next task that follows from it.
 
 ---
 
+## 2026-08-17 — Admin Panel, basic (Task #11) implemented
+
+- **Phase:** Phase 9 — Admin Panel, basic (`docs/ROADMAP.md` numbering; same
+  numbering as the internal TaskList's Task #11 for this project).
+- **Task:** Role-based admin access and a minimal moderation dashboard —
+  `role`/`accountStatus` fields on `User`, an `adminAuth` role-checking
+  middleware, `/api/admin/*` routes (dashboard counts, reports moderation
+  queue, photo-verification review queue, suspend/reinstate, a
+  `SUPER_ADMIN`-only role-change route), an `AuditLog` model written on every
+  admin mutation, and a matching role-gated `/admin` frontend section.
+- **Concurrency note — this task ran in the same live working tree as
+  Task #12 (Subscription scaffolding) at the same time, not in isolation.**
+  The launch instructions anticipated two separate sessions/clones needing a
+  later `git pull --rebase` if both #11 and #12 got picked up independently;
+  what actually happened in this sandbox was one shared filesystem with two
+  agent sessions editing concurrently, discovered mid-task when
+  `backend/server.js` and `backend/models/User.js` changed on disk between a
+  `Read` and the next `Edit` (the harness's own "file modified since read"
+  check caught it). Six files ended up touched by both passes:
+  `backend/models/User.js`, `backend/routes/discovery.js`,
+  `backend/server.js`, `frontend/src/App.jsx`, `frontend/src/api.js`,
+  `frontend/src/pages/Settings.jsx` (plus `docs/DATABASE_SCHEMA.md`/
+  `TODO.md` at the documentation layer). Task #12 committed first (commit
+  `9319600`), using a hunk-isolation technique of its own (`git
+  hash-object`/`git update-index --cacheinfo` to stage a reconstructed
+  "only this task's edits" blob per shared file, rather than `git add`ing
+  the live working-tree file directly, which would have pulled in this
+  task's still-uncommitted changes too). Once that commit landed, this
+  task's own working tree was diffed against the new `HEAD`
+  (`git diff HEAD -- <the six files>`) and confirmed the *only* remaining
+  difference on every one of them was this task's own additions — no
+  Task #12 content silently riding along, and nothing of Task #12's
+  accidentally clobbered — so this task's commit could just `git add`/
+  `git commit` normally on top, no reconstruction needed on this side.
+- **Design decisions:**
+  - **Role check is a separate middleware layered on top of
+    `requireAuth`, not a rewrite of it.** `backend/middleware/adminAuth.js`'s
+    `requireRole(...allowedRoles)` always runs *after*
+    `backend/middleware/auth.js`'s `requireAuth` (which already decoded the
+    JWT and set `req.user.id`) — it does not re-verify the token, it only
+    adds a fresh database read of the caller's current `role` and checks it
+    against the allowed list, 403ing otherwise. This keeps exactly one place
+    in the codebase owning JWT secret/token-verification logic (per the task
+    spec's explicit "reuse the existing JWT/user-loading pattern... don't
+    duplicate token verification logic" instruction), while still reading
+    `role` fresh on every request (not cached anywhere, not trusted from the
+    JWT payload) so a role change or suspension takes effect on the
+    affected user's very next request rather than only after their token
+    expires.
+  - **Role enum simplified from the originally-drafted 6 values to 4.**
+    `docs/DATABASE_SCHEMA.md`'s draft `users.role` enum listed `USER`,
+    `SUPER_ADMIN`, `ADMIN`, `MODERATOR`, `SUPPORT`, `ANALYST`. This task's
+    own spec explicitly asked for just `USER`/`SUPER_ADMIN`/`ADMIN`/
+    `MODERATOR`, and no route/permission built in this pass needs to
+    distinguish a support-only or analyst-only role (no dedicated support
+    queue, and the future analytics dashboard — Task #13/Phase 12 — isn't
+    started), so `SUPPORT`/`ANALYST` were left out rather than added as two
+    enum values nothing checks. Documented as a divergence in
+    `docs/DATABASE_SCHEMA.md`, easy to widen back later.
+  - **`accountStatus` (2 values: `ACTIVE`/`SUSPENDED`), not the draft's
+    `status` (4 values: `ACTIVE`/`SUSPENDED`/`BANNED`/`DELETED`).** Named
+    differently from the draft to avoid ambiguity with this document's other
+    status-like fields (verification statuses, report statuses), and scoped
+    down to a single reversible suspend/reinstate pair since the task spec
+    only asked for suspend, not permanent ban/delete — a real ban/delete
+    flow is future scope, not attempted here as a partial stand-in.
+  - **Suspension is enforced in exactly two places, both already-existing
+    surfaces extended rather than new gates invented:** `POST
+    /api/auth/login` (`backend/routes/auth.js`) checks `accountStatus`
+    *after* the password match succeeds (not before) — so a wrong-password
+    attempt against a suspended account still gets the same generic
+    "Invalid email or password" `401` as any other wrong password, never
+    leaking suspension status to someone who doesn't actually know the
+    password — and `GET /api/discovery/feed`
+    (`backend/routes/discovery.js`) excludes suspended users in the same
+    `$nin`-on-a-Set-of-excluded-ids shape already used for the blocked-user
+    exclusion (Task #10), just adding one more source set
+    (`User.find({accountStatus:'SUSPENDED'}).distinct('_id')`) to the
+    existing `Promise.all`. Deliberately did **not** add a suspension check
+    to `requireAuth` itself/globally — the task spec only asked for
+    login-blocking and discovery-exclusion, and a suspended user's existing
+    session (already-issued JWT, open Socket.IO connection) is documented
+    as an accepted gap rather than silently over-scoped into "instantly
+    revoke everything everywhere," see `PROJECT_STATE.md`'s Known Technical
+    Debt.
+  - **`AuditLog` over the draft's `moderation_actions` + `audit_logs` pair.**
+    The original schema draft had two separate collections — a closed-enum
+    `moderation_actions` log and a more generic `audit_logs` log. This task
+    folds both into one `AuditLog` model with a free-string `action` field
+    (e.g. `'user.suspended'`) instead of a closed enum, written from every
+    state-changing route via a single `backend/utils/auditUtils.js
+    #writeAuditLog()` helper — simpler for this basic pass, and a new admin
+    action type never requires a schema migration. `writeAuditLog()` is
+    deliberately isolated in its own try/catch (same "side effect can't turn
+    an otherwise-successful mutation into a 500" pattern already used for
+    notification creation in `backend/utils/notificationUtils.js`) — by the
+    time it's called, the actual admin action (suspend, role change, etc.)
+    has already fully succeeded, so a logging hiccup shouldn't roll that
+    back or hide the success from the caller, though it is still logged
+    server-side so a persistent audit-log failure isn't silent forever.
+  - **`GET /api/admin/users` and the role-change route are additions beyond
+    the task spec's explicit backend route list.** The task spec named
+    suspend/reinstate routes but didn't spell out how an admin would find a
+    target `userId` in the first place — `GET /api/admin/users?email=`
+    (a simple case-insensitive partial-email search, `ADMIN`+) fills that
+    gap, gated at the same role tier as suspend/reinstate since it's part of
+    the same account-management surface. `PATCH
+    /api/admin/users/:userId/role` (`SUPER_ADMIN`-only) implements the task
+    spec's explicit "only SUPER_ADMIN can change a role" requirement — since
+    the entire route is gated to `SUPER_ADMIN` by `requireRole('SUPER_ADMIN')`
+    before the handler ever runs, there's no separate in-handler
+    self-escalation check needed for ADMIN/MODERATOR: they're 403'd by the
+    role middleware itself, so they can never reach the handler to attempt
+    an escalation in the first place, including of their own account.
+  - **Admin-only view of `photoVerification.submittedPhotoUrl` is an
+    intentional, narrow exception to the "never expose the raw selfie"
+    rule** stated in `docs/DATABASE_SCHEMA.md`'s `verifications` section —
+    that rule was always scoped to *other, non-admin users' views* (the
+    public profile view, discovery cards, match cards all only ever show
+    the derived `photoVerified` boolean); `GET
+    /api/admin/verifications/photo` is the one place designed from the
+    start to need the actual photo, since a human reviewer can't approve or
+    reject a submission they can't see.
+- **Tests performed:**
+  - Backend server boots cleanly (all route groups, including the
+    concurrently-landed Task #12 subscription routes, no syntax/import
+    errors) — confirmed both before and after Task #12's commit landed.
+  - **A bug the fake-model-over-HTTP script below did NOT catch, and a real
+    curl-equivalent check against the actual `server.js` did:** the first
+    pass of `backend/server.js` added `const adminRouter =
+    require('./routes/admin')` but the corresponding `app.use('/api/admin',
+    adminRouter)` mount line was missed. Since the fake-model verification
+    script mounts `backend/routes/admin.js` directly onto its own Express
+    app (bypassing `server.js` entirely, same pattern every prior task's
+    verification script used), it passed 64/64 despite this bug. A second,
+    separate throwaway script that actually `require()`d the real
+    `server.js` and issued real HTTP requests against it caught the missing
+    mount immediately (`Cannot GET /api/admin/dashboard`, 404, instead of
+    the expected `401`) — fixed by adding the missing `app.use()` line, then
+    re-verified 401-for-no-auth against the real `server.js` for all nine
+    admin routes. **Lesson for future passes:** a fake-model-over-HTTP
+    script that mounts the router file directly is excellent for exercising
+    business logic without a live DB, but it cannot catch a `server.js`
+    wiring mistake (a forgotten `app.use()`, a wrong base path, route-order
+    shadowing) — that needs a second check that boots the actual entrypoint.
+  - A standalone Node script (`backend/__verify_admin_task11.js`, deleted
+    before this commit per this project's established "verify with
+    throwaway scripts, never commit them" convention) built a real Express
+    app + real HTTP server mounting the ACTUAL `backend/routes/admin.js`,
+    `auth.js`, and `discovery.js` files (only the Mongoose model modules —
+    `User`/`Profile`/`Match`/`Message`/`Report`/`AuditLog`/`Like`/`Block` —
+    swapped for tiny in-memory fakes via `require.cache` injection, since
+    MongoDB is unreachable in this sandbox) and drove it over real HTTP with
+    real signed JWTs for five seeded users (`USER`/`MODERATOR`/`ADMIN`/
+    `SUPER_ADMIN` roles, plus one `SUSPENDED` user). 64/64 checks passed —
+    see `PROJECT_STATE.md`'s "Last Successful Test" for the full breakdown
+    (no-auth 401s, wrong-role 403s, role-tier enforcement across all nine
+    routes, report review + audit logging, photo-verification approve/
+    reject + audit logging, suspend/reinstate + self-suspend rejection +
+    audit logging, `SUPER_ADMIN`-only role change + audit logging,
+    `GET /api/admin/users?email=` search, login blocking a suspended account
+    while a wrong password on that account still returns the generic `401`,
+    `role` now present on both the login response and `GET /api/auth/me`,
+    and the discovery feed excluding a suspended user).
+  - A second throwaway script (`backend/__curl_check_task11.js`, also
+    deleted before this commit) booted the REAL `backend/server.js` in the
+    same process and issued real HTTP requests against it — this is the
+    script that caught the missing `app.use()` bug described above, and
+    confirmed all nine `/api/admin/*` routes correctly `401` with no auth
+    against the actual entrypoint (the `403`-for-wrong-role case couldn't be
+    exercised this way since `adminAuth`'s `User.findById()` genuinely needs
+    a live database connection and just times out after 10s in this
+    sandbox — a real Mongoose buffering timeout, not a route/wiring bug,
+    same root cause noted throughout this project's history; that logic
+    path is instead fully covered by the fake-model script above).
+  - Frontend `npm run build` and `npm run lint` both pass with the new
+    `AdminDashboard.jsx`/`AdminReports.jsx`/`AdminVerifications.jsx`/
+    `AdminUsers.jsx` pages and `AdminNav.jsx`/`AdminRoute.jsx` components,
+    re-run again after Task #12's commit landed to confirm nothing broke in
+    the interim (same two pre-existing oxlint `only-export-components`
+    warnings carried forward from prior sessions, no new warnings).
+  - Not exercised (see `PROJECT_STATE.md`'s Known Technical Debt): real
+    MongoDB persistence/index behavior for the new `role` index and
+    `AuditLog.createdAt` index, and anything involving a real concurrent
+    admin-mutation race (e.g. two moderators reviewing the same report at
+    once) — no live database available in this sandbox.
+- **Files touched:** see `PROJECT_STATE.md`'s "Last Modified Files" for this
+  entry — not duplicated here to avoid drift between the two documents.
+- **Next task:** Task #6 — Final polish (security hardening pass, input
+  validation audit, consistent error-response format, a basic automated
+  test suite) — see `PROJECT_STATE.md`'s "Next Exact Task" for the full
+  scope and the note that a TaskList tool was not available in this session
+  to cross-check the internal task graph directly.
+
+---
+
 ## 2026-08-17 — Subscription scaffolding: Plans, mock checkout, entitlement checks (Task #12) implemented
 
 - **Phase:** Roughly Phase 10-equivalent scope in `docs/ROADMAP.md`'s

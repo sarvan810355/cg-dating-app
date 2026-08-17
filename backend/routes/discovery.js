@@ -113,17 +113,24 @@ router.get('/feed', requireAuth, async (req, res) => {
     // backend/utils/blockUtils.js#getBlockedUserIds() helper so this exact
     // bidirectional rule is applied identically in the matches list too
     // (backend/routes/matches.js).
-    const [alreadySwipedIds, myMatches, blockedIds] = await Promise.all([
+    // Task #11 (Admin panel, see docs/ROADMAP.md's Phase 9): also exclude
+    // any suspended user from discovery entirely — in both directions,
+    // matching the "don't show me, don't show them to anyone" spirit of the
+    // blocked-user exclusion above (a suspended user is blocked at login
+    // too — see backend/routes/auth.js — so this is mostly defense-in-depth
+    // for a still-valid, not-yet-expired token from before the suspension).
+    const [alreadySwipedIds, myMatches, blockedIds, suspendedIds] = await Promise.all([
       Like.find({ fromUser: req.user.id }).distinct('toUser'),
       Match.find({ users: req.user.id, unmatched: false }).select('users'),
       getBlockedUserIds(req.user.id),
+      User.find({ accountStatus: 'SUSPENDED' }).distinct('_id'),
     ]);
     const matchedIds = myMatches.map((m) =>
       m.users.find((u) => u.toString() !== req.user.id)
     );
 
     const excludedIds = new Set(
-      [req.user.id, ...alreadySwipedIds, ...matchedIds, ...blockedIds].map(String)
+      [req.user.id, ...alreadySwipedIds, ...matchedIds, ...blockedIds, ...suspendedIds].map(String)
     );
     filter.user = { $nin: [...excludedIds] };
 

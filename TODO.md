@@ -114,12 +114,30 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
       safety tips/scam-awareness content, reachable from Settings)
 
 ### Admin
-- [ ] Role field on User model (SUPER_ADMIN, ADMIN, MODERATOR, SUPPORT, ANALYST)
-- [ ] Role-gated `/admin` routes in the React app
-- [ ] Reports queue (moderation)
-- [ ] Verification review queue
-- [ ] Suspend / ban user actions
-- [ ] Audit log for admin actions
+- [x] Role field on User model — `backend/models/User.js`'s `role` (enum
+      `USER`/`SUPER_ADMIN`/`ADMIN`/`MODERATOR` — **divergence:** no
+      `SUPPORT`/`ANALYST` in this basic pass, see `docs/DATABASE_SCHEMA.md`'s
+      divergence note) + `accountStatus` (`ACTIVE`/`SUSPENDED`)
+- [x] Role-gated `/admin` routes in the React app — `frontend/src/
+      components/AdminRoute.jsx` (extends the `ProtectedRoute.jsx` pattern
+      with a `user.role` check), `/admin`, `/admin/reports`,
+      `/admin/verifications`, `/admin/users` in `frontend/src/App.jsx`; no
+      link to the section appears anywhere in the UI for a non-admin user
+      (`frontend/src/pages/Settings.jsx`)
+- [x] Reports queue (moderation) — `GET/PATCH /api/admin/reports*`
+      (`backend/routes/admin.js`), `frontend/src/pages/AdminReports.jsx`
+- [x] Verification review queue — `GET/PATCH /api/admin/verifications/photo*`
+      (`backend/routes/admin.js`), `frontend/src/pages/
+      AdminVerifications.jsx`
+- [x] Suspend / reinstate user actions — `PATCH /api/admin/users/:userId/
+      suspend` / `.../reinstate` (blocks login, hides from discovery),
+      `frontend/src/pages/AdminUsers.jsx`. **Divergence:** no permanent
+      ban/delete flow in this basic pass (reversible suspend only), see
+      `docs/DATABASE_SCHEMA.md`'s `accountStatus` divergence note
+- [x] Audit log for admin actions — `backend/models/AuditLog.js`,
+      `backend/utils/auditUtils.js#writeAuditLog()`, written from every
+      state-changing route above (report review, verification approve/
+      reject, suspend, reinstate, role change)
 
 ### Subscription (basic)
 - [x] Subscription plan model (CG_PLUS, CG_PRO, CG_ELITE), admin-editable pricing —

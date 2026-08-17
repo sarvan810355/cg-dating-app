@@ -2,6 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as api from '../api';
 import Button from '../components/Button';
+import { useAuth } from '../context/AuthContext';
+
+// Task #11 — Admin panel (see docs/ROADMAP.md's Phase 9): mirrors
+// frontend/src/components/AdminRoute.jsx's role list. Kept as a small local
+// copy for the same reason AdminRoute.jsx does — this is only ever a "should
+// this link even render" check, never the actual access boundary (every
+// /api/admin/* route re-checks role server-side regardless).
+const ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'MODERATOR'];
 
 // Minimal Settings screen (Task #6, see docs/ROADMAP.md Phase 6) — didn't
 // exist before this pass, created just large enough to hold notification
@@ -154,6 +162,8 @@ function MembershipSection() {
 }
 
 function Settings() {
+  const { user } = useAuth();
+  const isAdmin = ADMIN_ROLES.includes(user?.role);
   const [preferences, setPreferences] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(null); // field currently being saved
@@ -256,6 +266,20 @@ function Settings() {
             Blocked Users
           </Button>
         </Link>
+
+        {/* Task #11 — Admin panel (see docs/ROADMAP.md's Phase 9). Only
+            rendered for ADMIN/SUPER_ADMIN/MODERATOR — per the task spec, this
+            link (and the /admin section it points to) must be effectively
+            invisible to a regular user, not just blocked server-side if they
+            somehow guessed the URL (which the AdminRoute guard also
+            handles — see frontend/src/components/AdminRoute.jsx). */}
+        {isAdmin && (
+          <Link to="/admin">
+            <Button variant="ghost" className="mt-2 w-full">
+              Admin
+            </Button>
+          </Link>
+        )}
 
         <Link to="/dashboard">
           <Button variant="ghost" className="mt-2 w-full">

@@ -251,3 +251,59 @@ export function subscribeToPlan(planCode) {
 export function cancelSubscription() {
   return request('/api/subscription/cancel', { method: 'POST', auth: true });
 }
+
+// --- Admin panel (Task #11 in the internal TaskList; = docs/ROADMAP.md's
+// Phase 9). All routes require the caller's role to be ADMIN/SUPER_ADMIN/
+// MODERATOR (see backend/middleware/adminAuth.js) — a non-admin caller gets
+// a 403 from every one of these; the frontend's role gate
+// (frontend/src/components/AdminRoute.jsx) keeps non-admins from ever
+// reaching a screen that would call them. --------------------------------
+
+export function getAdminDashboard() {
+  return request('/api/admin/dashboard', { method: 'GET', auth: true });
+}
+
+export function getAdminReports({ status, page, limit } = {}) {
+  return request(`/api/admin/reports${toQueryString({ status, page, limit })}`, {
+    method: 'GET',
+    auth: true,
+  });
+}
+
+export function reviewAdminReport(id, { status, reviewNotes } = {}) {
+  return request(`/api/admin/reports/${id}`, {
+    method: 'PATCH',
+    body: { status, ...(reviewNotes !== undefined ? { reviewNotes } : {}) },
+    auth: true,
+  });
+}
+
+export function getAdminPhotoVerifications({ status, page, limit } = {}) {
+  return request(`/api/admin/verifications/photo${toQueryString({ status, page, limit })}`, {
+    method: 'GET',
+    auth: true,
+  });
+}
+
+export function reviewAdminPhotoVerification(userId, status) {
+  return request(`/api/admin/verifications/photo/${userId}`, {
+    method: 'PATCH',
+    body: { status },
+    auth: true,
+  });
+}
+
+export function getAdminUsers({ email, page, limit } = {}) {
+  return request(`/api/admin/users${toQueryString({ email, page, limit })}`, {
+    method: 'GET',
+    auth: true,
+  });
+}
+
+export function suspendAdminUser(userId) {
+  return request(`/api/admin/users/${userId}/suspend`, { method: 'PATCH', auth: true });
+}
+
+export function reinstateAdminUser(userId) {
+  return request(`/api/admin/users/${userId}/reinstate`, { method: 'PATCH', auth: true });
+}

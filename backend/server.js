@@ -15,6 +15,7 @@ const verificationRouter = require('./routes/verification');
 const reportsRouter = require('./routes/reports');
 const blocksRouter = require('./routes/blocks');
 const subscriptionRouter = require('./routes/subscription');
+const adminRouter = require('./routes/admin');
 const { initSocket } = require('./socket');
 const { seedDefaultPlans } = require('./utils/entitlementUtils');
 
@@ -46,6 +47,11 @@ app.use('/api/blocks', blocksRouter);
 // /api/subscriptions (plural) + /api/payments base paths — see
 // docs/API_DOCUMENTATION.md's Subscription section for the divergence note.
 app.use('/api', subscriptionRouter);
+// Task #11 — Admin panel (see docs/ROADMAP.md's Phase 9). Every route in
+// backend/routes/admin.js is auth + role-gated internally (requireAuth +
+// requireRole(...) per route) — nothing here needs to change based on who's
+// calling.
+app.use('/api/admin', adminRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'CG Dating API' });

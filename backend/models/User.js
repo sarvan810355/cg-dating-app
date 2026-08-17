@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { VERIFICATION_STATUSES } = require('../constants/verificationOptions');
+const { USER_ROLES, ACCOUNT_STATUSES } = require('../constants/adminOptions');
 
 // Core account/auth record. Profile details (bio, photos, preferences, etc.)
 // live in the separate Profile model.
@@ -30,6 +31,34 @@ const UserSchema = new mongoose.Schema(
     },
     lastLoginAt: {
       type: Date,
+    },
+
+    // --- Admin / Roles (Task #11 in the internal TaskList; = docs/
+    // ROADMAP.md's Phase 9). Kept directly on User rather than a separate
+    // `admin_users` collection (despite docs/DATABASE_SCHEMA.md's
+    // `admin_users` section originally describing one as a possibility) —
+    // same "1:1-with-user, always-fetched-together account state" reasoning
+    // already used for notificationPreferences/mobileVerification/
+    // photoVerification above; a role check needs to be a single lookup on
+    // the already-loaded User document, not a join or a second collection
+    // query on every admin request. See backend/constants/adminOptions.js
+    // for the (deliberately smaller-than-originally-drafted) role enum. ---
+    role: {
+      type: String,
+      enum: USER_ROLES,
+      default: 'USER',
+    },
+    // A suspended account is blocked at login (backend/routes/auth.js) and
+    // excluded from discovery (backend/routes/discovery.js) — see
+    // backend/constants/adminOptions.js for the enum. Reversible via
+    // `PATCH /api/admin/users/:userId/reinstate`; there is no permanent
+    // ban/delete flow in this pass (unrelated to the pre-existing, still-
+    // unused `isActive` boolean above, which predates this task and has no
+    // code path reading/writing it).
+    accountStatus: {
+      type: String,
+      enum: ACCOUNT_STATUSES,
+      default: 'ACTIVE',
     },
 
     // --- Notification preferences (Task #6, see docs/ROADMAP.md Phase 6) ---
@@ -101,5 +130,10 @@ const UserSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Supports the admin panel's "search/list users" query pattern (docs/
+// DATABASE_SCHEMA.md's `users` section already called this out as a planned
+// index, ahead of the role field itself existing).
+UserSchema.index({ role: 1 });
 
 module.exports = mongoose.model('User', UserSchema);

@@ -89,7 +89,41 @@ npm run dev
 
 You can also run the backend without auto-restart via `npm start` in `backend/`.
 
-## 4. Build for production
+## 4. Creating the first admin account (manual, one-time)
+
+The Admin panel (Task #11, see `docs/ROADMAP.md`'s Phase 9) has no self-serve "become
+admin" flow, anywhere — this is intentional. Promoting an account to `SUPER_ADMIN`,
+`ADMIN`, or `MODERATOR` is a security-sensitive action, so the very first admin account
+on a real deployment must be created by directly editing the database, not through the
+app or API. (Once at least one `SUPER_ADMIN` exists, they can promote/demote further
+accounts through the app itself, via `PATCH /api/admin/users/:userId/role` — see
+`docs/API_DOCUMENTATION.md`'s Admin section.)
+
+1. Sign up for a normal account through the app first (`POST /api/auth/signup` or the
+   Signup screen), using the email you want as the first admin.
+2. Connect to your real MongoDB instance (local `mongod` or Atlas) with `mongosh` (or
+   Compass, or any Mongo client), pointed at the same database `MONGODB_URI` in
+   `backend/.env` uses.
+3. Run:
+   ```js
+   use cg-dating-app   // or whatever your MONGODB_URI's database name is
+
+   db.users.updateOne(
+     { email: "your-admin-email@example.com" },
+     { $set: { role: "SUPER_ADMIN" } }
+   )
+   ```
+4. Log out and back in (or just refresh — the role is read fresh from the database on
+   every admin request, but the frontend's own copy of `user.role` comes from
+   `GET /api/auth/me`, which the app already calls on load). The account will now see an
+   "Admin" link in Settings, and the `/admin` section (dashboard, reports queue, photo
+   verification queue, user management) becomes reachable.
+
+There is no seed script for this — a throwaway `db.users.updateOne(...)` command like
+the one above is the entire "setup" required, and it only ever needs to be run once per
+deployment to bootstrap the first `SUPER_ADMIN`.
+
+## 5. Build for production
 
 ```bash
 # Frontend production build (outputs to frontend/dist)
@@ -103,7 +137,7 @@ npm run preview
 The backend has no separate build step (plain Node/Express) — `npm start` runs it
 directly with `node server.js`.
 
-## 5. Linting
+## 6. Linting
 
 ```bash
 cd frontend
@@ -112,7 +146,7 @@ npm run lint   # runs oxlint
 
 No lint script is configured for the backend yet.
 
-## 6. Tests
+## 7. Tests
 
 `npm test` — to be implemented in Phase 13 (Testing & QA). No automated test suite
 exists yet in either `backend/` or `frontend/`. See `docs/TESTING_STRATEGY.md` for the

@@ -12,7 +12,12 @@ import Verification from './pages/Verification';
 import BlockedUsers from './pages/BlockedUsers';
 import SafetyCenter from './pages/SafetyCenter';
 import Subscription from './pages/Subscription';
+import AdminDashboard from './pages/AdminDashboard';
+import AdminReports from './pages/AdminReports';
+import AdminVerifications from './pages/AdminVerifications';
+import AdminUsers from './pages/AdminUsers';
 import ProtectedRoute from './components/ProtectedRoute';
+import AdminRoute from './components/AdminRoute';
 
 function App() {
   return (
@@ -98,6 +103,44 @@ function App() {
           <ProtectedRoute>
             <Subscription />
           </ProtectedRoute>
+        }
+      />
+      {/* Task #11 — Admin panel (see docs/ROADMAP.md's Phase 9). Role-gated
+          via AdminRoute (not just ProtectedRoute) — see frontend/src/
+          components/AdminRoute.jsx. Deliberately outside the app's normal
+          bottom-nav flow (docs/DESIGN_SYSTEM.md) and never linked from
+          anywhere in the UI for a non-admin user — see Dashboard.jsx /
+          Settings.jsx's role-conditional link. */}
+      <Route
+        path="/admin"
+        element={
+          <AdminRoute>
+            <AdminDashboard />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/admin/reports"
+        element={
+          <AdminRoute>
+            <AdminReports />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/admin/verifications"
+        element={
+          <AdminRoute>
+            <AdminVerifications />
+          </AdminRoute>
+        }
+      />
+      <Route
+        path="/admin/users"
+        element={
+          <AdminRoute>
+            <AdminUsers />
+          </AdminRoute>
         }
       />
     </Routes>
