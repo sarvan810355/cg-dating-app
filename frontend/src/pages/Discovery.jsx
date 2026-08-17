@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import * as api from '../api';
 import Button from '../components/Button';
 import MatchModal from '../components/MatchModal';
+import NotificationBell from '../components/NotificationBell';
 import { DATING_INTENTIONS } from '../constants/profileOptions';
 
 function intentionLabel(value) {
@@ -143,13 +144,14 @@ function Discovery() {
       <div className="mx-auto w-full max-w-sm">
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-2xl font-bold text-text-primary">Discover</h1>
-          <div className="flex gap-4 text-sm">
+          <div className="flex items-center gap-4 text-sm">
             <Link to="/matches" className="font-medium text-primary hover:underline">
               Matches
             </Link>
             <Link to="/dashboard" className="text-text-secondary hover:underline">
               Home
             </Link>
+            <NotificationBell />
           </div>
         </div>
 

@@ -6,7 +6,8 @@ const Profile = require('../models/Profile');
 const Message = require('../models/Message');
 const { requireAuth } = require('../middleware/auth');
 const { isParticipant, otherParticipant } = require('../utils/matchUtils');
-const { roomName } = require('../socket');
+const { createNotification } = require('../utils/notificationUtils');
+const { roomName, isUserInRoom } = require('../socket');
 const { DEFAULT_MATCHES_LIMIT, MAX_MATCHES_LIMIT } = require('../constants/discoveryOptions');
 const {
   MAX_MESSAGE_LENGTH,
@@ -176,18 +177,48 @@ router.post('/:matchId/messages', requireAuth, async (req, res) => {
     // yourself: a Match's two users are, by construction, distinct).
     const recipientId = otherParticipant(match, req.user.id);
 
-    const saved = await Message.create({
-      match: match._id,
-      sender: req.user.id,
-      recipient: recipientId,
-      text,
-    });
+    const [saved, senderProfile] = await Promise.all([
+      Message.create({
+        match: match._id,
+        sender: req.user.id,
+        recipient: recipientId,
+        text,
+      }),
+      Profile.findOne({ user: req.user.id }).select('displayName'),
+    ]);
 
     const json = toMessageJSON(saved);
 
     const io = req.app.get('io');
     if (io) {
       io.to(roomName(match._id)).emit('message:new', json);
+    }
+
+    // Notification creation (Task #6, see docs/ROADMAP.md Phase 6).
+    // Isolated in its own try/catch so a notification hiccup can never turn
+    // a successful, already-persisted-and-broadcast message send into a
+    // 500. Skipped entirely when the recipient is actively connected to
+    // this match's Socket.IO room (i.e. has this chat open right now) — per
+    // the Task #6 spec, that avoids redundant noise on top of the
+    // `message:new` live delivery they're already seeing.
+    try {
+      const recipientInRoom = io ? isUserInRoom(io, roomName(match._id), recipientId) : false;
+      if (!recipientInRoom) {
+        await createNotification({
+          recipientId,
+          type: 'message',
+          payload: {
+            matchId: String(match._id),
+            fromUserId: String(req.user.id),
+            fromUserName: senderProfile?.displayName || null,
+            messageId: String(saved._id),
+            preview: text.length > 140 ? `${text.slice(0, 140)}…` : text,
+          },
+          io,
+        });
+      }
+    } catch (notifyErr) {
+      console.error('Notification creation error (message):', notifyErr);
     }
 
     return res.status(201).json({ message: json });

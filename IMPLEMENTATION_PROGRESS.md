@@ -10,6 +10,133 @@ next task that follows from it.
 
 ---
 
+## 2026-08-17 — Notifications (Task #6) implemented
+
+- **Phase:** Phase 6 — Notifications (docs/ROADMAP.md numbering; internal
+  TaskList numbering for this same task was #8 — see the numbering note in
+  PROJECT_STATE.md's "Next Exact Task").
+- **Task:** Basic in-app notifications for match/like/message events, plus
+  per-type preferences: a `Notification` model + REST API, notification
+  creation wired into the existing swipe/match and message-send code paths,
+  a live `notification:new` Socket.IO event, and a frontend bell/badge +
+  dropdown notification center + a new minimal Settings page for the
+  preference toggles. Real push delivery (Firebase Cloud Messaging) is
+  explicitly out of scope for this pass and marked MOCK/TEMPORARY/deferred.
+- **Design decisions:**
+  - **No identity in `like` notifications.** Checked `docs/BUSINESS_PLAN.md`
+    per the task brief — "see who liked you" is listed as a premium-tier
+    (`CG_PLUS`/`CG_PRO`/`CG_ELITE`) reveal. A `like` notification's
+    `payload` is therefore always `{}`; only a `match` notification (which
+    already mutually reveals both sides) carries `fromUserId`/
+    `fromUserName`. There's no premium-reveal code path yet (Subscription
+    is Task #10/Phase 10, not started) — when it lands, it can add an
+    *additional* enriched notification without changing this shape.
+  - **Preferences live on `User`, not a new collection.** A
+    `notificationPreferences` sub-document
+    (`matchNotifications`/`likeNotifications`/`messageNotifications`, all
+    default `true`) was added directly to `backend/models/User.js` — same
+    simplification already used for the `role` field (`admin_users`) in
+    `docs/DATABASE_SCHEMA.md`. Preference gating is enforced once, centrally,
+    inside `backend/utils/notificationUtils.js#createNotification()` (via
+    the pure, DB-independent `isNotificationTypeEnabled()`), not duplicated
+    at each of the three trigger call sites.
+  - **Safety-critical types can't be disabled — by construction, not by a
+    runtime check.** `verification`/`safety`/`subscription` simply have no
+    entry in `PREFERENCE_FIELD_BY_TYPE`
+    (`backend/constants/notificationOptions.js`), so there's no field for a
+    client to even attempt to toggle for them; `isNotificationTypeEnabled()`
+    always returns `true` for any type not in that map. No code path creates
+    those types yet (future phases), so this is future-proofing.
+  - **Message-notification suppression reuses existing Socket.IO room
+    bookkeeping.** Rather than adding separate presence tracking, every
+    socket already auto-joins a per-match room (`match:<id>`) when actively
+    viewing a chat (existing Task #5 behavior) — a new
+    `backend/socket.js#isUserInRoom()` helper checks that room's connected
+    sockets for the recipient before creating a `message` notification, so
+    an already-open chat doesn't also produce redundant notification noise.
+  - **New per-user Socket.IO room for delivery.** Every connected socket now
+    also auto-joins `user:<userId>` on connect (`backend/socket.js`), a
+    second room alongside the existing per-match ones. Emitting
+    `notification:new` to a room with no connected sockets is a no-op, which
+    is exactly "only push live if the recipient is actively connected" from
+    the task spec — no separate online/presence check needed.
+  - **Frontend socket lifecycle changed.** Previously only `Chat.jsx`
+    connected the shared Socket.IO client (on mount) and disconnected it (on
+    unmount) — fine when sockets only mattered inside a chat screen, but
+    notifications need live delivery from *any* authenticated screen. The
+    new `NotificationContext` now connects the socket for the whole
+    authenticated session (as soon as `user` is set) and
+    `AuthContext.logout()` is what disconnects it; `Chat.jsx` still
+    connects defensively if needed but no longer tears the connection down
+    on unmount. This is called out explicitly as a technical-debt item to
+    re-verify once a real two-browser-session DB-backed test is possible.
+- **Backend files touched:** `backend/models/Notification.js` (new),
+  `backend/constants/notificationOptions.js` (new — `NOTIFICATION_TYPES`,
+  `PREFERENCE_FIELD_BY_TYPE`, pagination defaults), `backend/utils/
+  notificationUtils.js` (new — `createNotification()`,
+  `isNotificationTypeEnabled()`, `toNotificationJSON()`),
+  `backend/routes/notifications.js` (new — `GET /`, `GET /unread-count`,
+  `GET`/`PUT /preferences`, `PATCH /read-all`, `PATCH /:id/read`),
+  `backend/models/User.js` (added `notificationPreferences`),
+  `backend/socket.js` (added `userRoomName()`/`isUserInRoom()`, auto-join on
+  connect), `backend/routes/discovery.js` (match/like notification
+  creation, wrapped in try/catch), `backend/routes/matches.js` (message
+  notification creation with room-presence suppression, wrapped in
+  try/catch), `backend/server.js` (mounted `/api/notifications`).
+- **Frontend files touched:** `frontend/src/api.js` (six new notification
+  API functions), `frontend/src/context/NotificationContext.jsx` (new),
+  `frontend/src/components/NotificationBell.jsx` (new), `frontend/src/
+  pages/Settings.jsx` (new), `frontend/src/App.jsx` (`/settings` route),
+  `frontend/src/main.jsx` (`NotificationProvider` wraps `App`),
+  `frontend/src/context/AuthContext.jsx` (`logout()` disconnects the shared
+  socket), `frontend/src/socket.js` (comment update — lifecycle ownership
+  changed, no code change), `frontend/src/pages/Chat.jsx` (no longer
+  disconnects on unmount — see design decisions above), `frontend/src/
+  pages/Dashboard.jsx` / `Discovery.jsx` / `Matches.jsx` (added
+  `NotificationBell` to nav; Dashboard also gets a Settings link).
+- **Tests performed:** Backend server boot-checked clean (all six route
+  groups + Socket.IO, no import/syntax errors). Curled every new
+  `/api/notifications*` route with no/bad auth → all `401`s, plus a
+  regression check that pre-existing `/api/matches`/`/api/discovery/*`
+  routes still correctly `401` (unaffected by this session's changes). A
+  standalone Node script (38/38 checks, no live DB — same pattern as prior
+  sessions) covered: full `Notification` schema validation (all 6 enum
+  types, required-field rejection, invalid-type rejection, defaults,
+  createdAt-only timestamps, both declared indexes present),
+  `User.notificationPreferences` defaults + validation,
+  `isNotificationTypeEnabled()`'s preference-gating logic across every
+  combination (including proving safety-critical types can't be disabled
+  even when every preference field is `false`), and `socket.js`'s
+  `roomName()`/`userRoomName()`/`isUserInRoom()` helpers against a fake `io`
+  object. A real `socket.io-client` connected a live JWT-authed socket
+  against the running server specifically to exercise the new
+  `socket.join(userRoomName(...))` connect-time line for real — connection
+  succeeded, no server crash, clean server log. Frontend `npm run build`
+  and `npm run lint` both pass (one pre-existing unrelated oxlint warning in
+  `AuthContext.jsx` carried forward, plus an equivalent one now in the new
+  `NotificationContext.jsx` for the same already-accepted
+  hook-plus-component-in-one-file pattern). DB-touching behavior (actual
+  notification persistence/pagination/preference-gating against real
+  writes, a live `notification:new` broadcast reaching a real second
+  browser session, the new socket lifecycle across a real login->navigate->
+  logout cycle) could not be exercised end-to-end in this sandbox — see
+  PROJECT_STATE.md's Known Technical Debt.
+- **Docs updated:** `docs/DATABASE_SCHEMA.md` (`notifications` marked
+  `[IMPLEMENTED]` with full field/index/divergence detail, new
+  `notification_preferences` section describing the `User` sub-document,
+  new "Real-time delivery" subsection), `docs/API_DOCUMENTATION.md`
+  (Notifications section rewritten from `[PLANNED]` to `[IMPLEMENTED]` with
+  full request/response contracts for all 6 routes plus the
+  `notification:new` socket event and the trigger-point breakdown),
+  `docs/ROADMAP.md` (Phase 6 row marked Complete), `TODO.md` (Notifications
+  checklist items checked off, FCM push added as an explicit remaining
+  item), `MOCK_FEATURES.md` (FCM push delivery entry rewritten to
+  distinguish it from the now-real in-app notification system).
+- **Next task:** Task #9 (internal TaskList numbering) / Phase 7 (docs/
+  ROADMAP.md numbering) — Verification (mobile OTP + selfie/photo
+  verification, verification badge on profiles). See PROJECT_STATE.md's
+  "Next Exact Task" for full scope and the numbering-reconciliation note.
+
 ## 2026-08-17 — Chat (Task #5) implemented
 
 - **Phase:** Phase 5 — Real-Time Chat

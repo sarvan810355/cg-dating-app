@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import * as api from '../api';
 import Avatar from '../components/Avatar';
 import Button from '../components/Button';
+import NotificationBell from '../components/NotificationBell';
 
 function Matches() {
   const [matches, setMatches] = useState([]);
@@ -32,13 +33,14 @@ function Matches() {
       <div className="mx-auto w-full max-w-sm">
         <div className="mb-6 flex items-center justify-between">
           <h1 className="text-2xl font-bold text-text-primary">Matches</h1>
-          <div className="flex gap-4 text-sm">
+          <div className="flex items-center gap-4 text-sm">
             <Link to="/discover" className="font-medium text-primary hover:underline">
               Discover
             </Link>
             <Link to="/dashboard" className="text-text-secondary hover:underline">
               Home
             </Link>
+            <NotificationBell />
           </div>
         </div>
 

@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { getMyProfile } from '../api';
 import Avatar from '../components/Avatar';
 import Button from '../components/Button';
+import NotificationBell from '../components/NotificationBell';
 
 function Dashboard() {
   const { user, logout } = useAuth();
@@ -36,7 +37,10 @@ function Dashboard() {
   return (
     <div className="min-h-screen bg-background px-4 py-10">
       <div className="mx-auto w-full max-w-sm rounded-2xl border border-border bg-surface p-8 text-center shadow-sm">
-        <h1 className="mb-1 text-3xl font-bold text-primary">CG Dating</h1>
+        <div className="mb-1 flex items-center justify-between">
+          <h1 className="text-3xl font-bold text-primary">CG Dating</h1>
+          <NotificationBell />
+        </div>
         <p className="mb-4 text-text-secondary">You're logged in as</p>
         <p className="mb-6 text-lg font-medium text-text-primary">{user?.email}</p>
 
@@ -94,6 +98,12 @@ function Dashboard() {
             </Button>
           </Link>
         </div>
+
+        <Link to="/settings">
+          <Button variant="ghost" className="w-full">
+            Settings
+          </Button>
+        </Link>
 
         <Button variant="ghost" className="w-full" onClick={handleLogout}>
           Log out

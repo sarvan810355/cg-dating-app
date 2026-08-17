@@ -7,6 +7,7 @@ const Match = require('../models/Match');
 const { requireAuth } = require('../middleware/auth');
 const { toPublicProfileJSON } = require('../utils/profileSerializers');
 const { canonicalPair, isMutualLike } = require('../utils/matchUtils');
+const { createNotification } = require('../utils/notificationUtils');
 const { DATING_INTENTIONS } = require('../constants/profileOptions');
 const {
   SWIPE_ACTIONS,
@@ -210,6 +211,56 @@ router.post('/swipe', requireAuth, async (req, res) => {
     let match = null;
     if (action === 'like') {
       match = await createMatchIfMutual(req.user.id, toUserId);
+    }
+
+    // Notification creation (Task #6, see docs/ROADMAP.md Phase 6).
+    // Deliberately isolated in its own try/catch so a notification failure
+    // (e.g. a preference-lookup hiccup) can never turn a successful swipe
+    // into a 500 — the swipe itself has already been recorded above.
+    try {
+      const io = req.app.get('io');
+      if (match) {
+        // Mutual match — notify both participants, each learning the
+        // *other* person's identity. Not premium-gated: a match already
+        // reveals both sides to each other by definition, unlike a
+        // one-sided 'like' below.
+        await Promise.all([
+          createNotification({
+            recipientId: req.user.id,
+            type: 'match',
+            payload: {
+              matchId: String(match._id),
+              fromUserId: String(toUserId),
+              fromUserName: targetProfile?.displayName || null,
+            },
+            io,
+          }),
+          createNotification({
+            recipientId: toUserId,
+            type: 'match',
+            payload: {
+              matchId: String(match._id),
+              fromUserId: String(req.user.id),
+              fromUserName: myProfile?.displayName || null,
+            },
+            io,
+          }),
+        ]);
+      } else if (action === 'like') {
+        // Not yet mutual — notify the recipient that *someone* liked them,
+        // but never reveal who: "see who liked you" is listed as a
+        // premium-tier reveal in docs/BUSINESS_PLAN.md, so this payload
+        // deliberately carries no identifying fields. The frontend renders
+        // a generic "Someone liked your profile" message from `type` alone.
+        await createNotification({
+          recipientId: toUserId,
+          type: 'like',
+          payload: {},
+          io,
+        });
+      }
+    } catch (notifyErr) {
+      console.error('Notification creation error (swipe):', notifyErr);
     }
 
     return res.status(201).json({

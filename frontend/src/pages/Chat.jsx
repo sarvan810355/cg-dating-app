@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import * as api from '../api';
-import { getSocket, disconnectSocket } from '../socket';
+import { getSocket } from '../socket';
 import { useAuth } from '../context/AuthContext';
 import Avatar from '../components/Avatar';
 import Button from '../components/Button';
@@ -95,6 +95,14 @@ function Chat() {
   }, [matchId]);
 
   // --- Socket.IO: connect, join room, listen for live events ---------------
+  // Task #6 note: the shared connection (frontend/src/socket.js) is no
+  // longer torn down when this screen unmounts — NotificationContext now
+  // owns connecting it for the whole authenticated session (so live
+  // notification delivery keeps working after leaving a chat), and
+  // AuthContext.logout() is what actually disconnects it. This effect still
+  // connects it if it isn't already (e.g. a chat opened via a deep link
+  // before NotificationContext's own effect has run) and always joins/leaves
+  // its own match room on mount/unmount.
   useEffect(() => {
     const socket = getSocket();
     setConnectionError('');
@@ -146,7 +154,8 @@ function Chat() {
       socket.off('message:new', handleMessageNew);
       socket.off('typing', handleTyping);
       socket.off('message:read', handleMessageRead);
-      disconnectSocket();
+      // Deliberately NOT disconnecting the shared socket here anymore — see
+      // the effect comment above.
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [matchId]);

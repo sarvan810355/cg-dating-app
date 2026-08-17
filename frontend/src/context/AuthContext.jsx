@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import * as api from '../api';
+import { disconnectSocket } from '../socket';
 
 const AuthContext = createContext(null);
 
@@ -46,6 +47,12 @@ export function AuthProvider({ children }) {
   function logout() {
     api.clearToken();
     setUser(null);
+    // Task #6: the shared Socket.IO connection now stays open for the whole
+    // authenticated session (NotificationContext connects it, not just
+    // Chat.jsx) so live notification delivery works from any screen — tear
+    // it down here instead, so a logged-out session doesn't keep an
+    // authenticated-looking socket alive.
+    disconnectSocket();
   }
 
   const value = { user, loading, signup, login, logout };

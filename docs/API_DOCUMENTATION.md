@@ -391,13 +391,148 @@ Base path: `/api/reports`, `/api/blocks`
 - `DELETE /api/blocks/:blockedUserId` — auth required — unblock.
 - `GET /api/blocks` — auth required — list users the caller has blocked.
 
-## 8. Notifications — `[PLANNED]`
+## 8. Notifications — `[IMPLEMENTED, in-app only — FCM push is MOCK/TEMPORARY-deferred]`
 
-Base path: `/api/notifications`
+Base path: `/api/notifications`, plus one Socket.IO event
+(`backend/socket.js`). Routes in `backend/routes/notifications.js`. All
+routes require auth; a notification is only ever visible to/actionable by
+its own `recipient` — no route accepts another user's notification id (a
+mismatched id is a `404`, not a `403`, so callers can't probe for the
+existence of other users' notifications).
 
-- `GET /api/notifications?page=&limit=` — auth required — paginated notifications for the caller.
-- `PUT /api/notifications/:id/read` — auth required — mark one as read.
-- `PUT /api/notifications/read-all` — auth required.
+**Divergence from the original draft:** `PUT /api/notifications/:id/read`
+and `PUT /api/notifications/read-all` are implemented as `PATCH`, not `PUT`
+(a mark-read is a partial state transition, not a full resource
+replacement) — matches this codebase's existing convention
+(`PATCH /api/matches/:matchId/messages/read`). Two additional routes beyond
+the original draft were added: `GET /api/notifications/unread-count` (a
+cheap badge-count endpoint so the frontend doesn't have to paginate the
+full list just to show a number) and `GET`/`PUT
+/api/notifications/preferences` (per-type opt-out toggles — see
+`docs/DATABASE_SCHEMA.md`'s `notification_preferences` section).
+
+**MOCK/TEMPORARY note:** real push notifications (Firebase Cloud Messaging,
+so a device gets notified even when the app isn't open) are **not
+implemented at all** in this pass — no FCM credentials configured yet, see
+`MOCK_FEATURES.md`. Everything below (the REST API, the DB-backed
+notification center, and the live Socket.IO event) is a real, non-mocked
+in-app-only implementation.
+
+### `GET /api/notifications`
+- **Query params (optional):** `page` (default `1`), `limit` (default `20`,
+  capped at `50`).
+- Returns the caller's notifications, newest first.
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "notifications": [
+      {
+        "id": "...",
+        "type": "match" | "like" | "message" | "verification" | "safety" | "subscription",
+        "payload": { "matchId": "...", "fromUserId": "...", "fromUserName": "..." },
+        "read": false,
+        "createdAt": "..."
+      }
+    ],
+    "page": 1,
+    "hasMore": false
+  }
+  ```
+  `payload` shape varies by `type` — see `docs/DATABASE_SCHEMA.md`'s
+  `notifications` section for the full breakdown per type. Notably, `like`
+  notifications always have `payload: {}` — no identifying fields, since
+  "see who liked you" is a premium-gated reveal (see
+  `docs/BUSINESS_PLAN.md`); the frontend renders a generic "Someone liked
+  your profile" message from `type` alone.
+- **Errors:** `401`; `500`.
+
+### `GET /api/notifications/unread-count`
+- **Success response:** `200 OK` — `{ "unreadCount": 3 }`.
+- **Errors:** `401`; `500`.
+
+### `PATCH /api/notifications/:id/read`
+- Marks one notification as read. Idempotent — re-calling an already-read
+  notification just returns its current state.
+- **Success response:** `200 OK` — `{ "notification": { "id", "type", "payload", "read": true, "createdAt" } }`.
+- **Errors:** `400` — invalid `id`; `404` — no such notification for this
+  caller (including one that belongs to someone else); `401`; `500`.
+
+### `PATCH /api/notifications/read-all`
+- Marks every unread notification for the caller as read. Idempotent —
+  re-calling with nothing unread reports `updatedCount: 0`.
+- **Success response:** `200 OK` — `{ "updatedCount": 2 }`.
+- **Errors:** `401`; `500`.
+
+### `GET /api/notifications/preferences`
+- Returns the caller's current per-type notification toggles, defaulting
+  every field to `true` (opt-out, not opt-in) if the caller's account
+  predates this field or has never customized it.
+- **Success response:** `200 OK` —
+  ```json
+  { "preferences": { "matchNotifications": true, "likeNotifications": true, "messageNotifications": true } }
+  ```
+- **Errors:** `401`; `500`.
+
+### `PUT /api/notifications/preferences`
+- **Request body (all optional, partial update):**
+  ```json
+  { "matchNotifications": true, "likeNotifications": false, "messageNotifications": true }
+  ```
+- **Validation:** any provided field must be a boolean; unknown fields are
+  silently ignored. There is deliberately no field here to disable
+  `verification`/`safety`/`subscription` notifications — they aren't
+  user-toggleable at all (safety/account-critical notifications must always
+  be delivered); see `docs/DATABASE_SCHEMA.md`.
+- **Effect:** a disabled type is enforced at notification-creation time —
+  the triggering action (swipe, message) still succeeds normally, it just
+  silently skips creating that `Notification` document (no error surfaced).
+- **Success response:** `200 OK` — same shape as the `GET` above, reflecting
+  the merged result.
+- **Errors:** `400` — a provided field isn't a boolean (`{ "message":
+  "Invalid preferences", "errors": [...] }`); `401`; `500`.
+
+### When notifications are created — trigger points
+No dedicated "create notification" endpoint exists for clients — every
+`Notification` is created server-side as a side effect of an existing
+action, via the shared `backend/utils/notificationUtils.js#createNotification()`
+helper (which also handles the preference check and the live socket emit
+below):
+- **`match`** — `POST /api/discovery/swipe` (`backend/routes/discovery.js`),
+  when a swipe completes a mutual like. **Both** participants are notified,
+  each learning the *other* person's identity (`fromUserId`/`fromUserName`
+  in their own notification's payload).
+- **`like`** — same route, when a `like` swipe does **not** yet complete a
+  mutual match. Only the recipient is notified, with an empty `payload`
+  (see the MOCK/TEMPORARY note above re: premium-gated reveal).
+- **`message`** — `POST /api/matches/:matchId/messages`
+  (`backend/routes/matches.js`), after the message is persisted and
+  broadcast via `message:new`. **Skipped** if the recipient currently has an
+  active socket joined to that match's room (i.e. they have the chat open
+  right now) — determined via `backend/socket.js#isUserInRoom()`, so an
+  already-visible live message doesn't also produce redundant notification
+  noise.
+- Notification creation is wrapped in its own `try`/`catch` at both trigger
+  points, isolated from the main request's success path — a notification
+  failure never turns an otherwise-successful swipe or message send into a
+  `500`.
+
+### Socket.IO event — `notification:new`
+Reuses the same Socket.IO server as Chat (`backend/socket.js`'s
+`initSocket()`), same JWT handshake auth. Every connected socket
+additionally auto-joins a personal room, `user:<userId>` (distinct from the
+per-match `match:<matchId>` rooms Chat uses), immediately on connect — no
+separate `join`-style event needed for notifications, unlike `match:join`
+for chat.
+- **`notification:new`** (server → the recipient's personal room) — emitted
+  whenever `createNotification()` creates a document, to
+  `user:<recipientId>`. Payload is the same shape as one entry in
+  `GET /api/notifications`'s `notifications` array
+  (`{ id, type, payload, read: false, createdAt }`). Emitting to a room with
+  no connected sockets is a no-op, so this naturally only reaches the
+  recipient if they currently have an active connection — no separate
+  online/presence check needed. The frontend uses this to bump the
+  notification bell's badge count live (see
+  `frontend/src/context/NotificationContext.jsx`) without polling.
 
 ## 9. Payments / Subscription — `[PLANNED]`
 

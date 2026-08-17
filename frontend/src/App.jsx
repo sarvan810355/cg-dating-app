@@ -7,6 +7,7 @@ import ProfileBuilder from './pages/ProfileBuilder';
 import Discovery from './pages/Discovery';
 import Matches from './pages/Matches';
 import Chat from './pages/Chat';
+import Settings from './pages/Settings';
 import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
@@ -52,6 +53,14 @@ function App() {
         element={
           <ProtectedRoute>
             <Chat />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/settings"
+        element={
+          <ProtectedRoute>
+            <Settings />
           </ProtectedRoute>
         }
       />

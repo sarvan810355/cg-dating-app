@@ -30,8 +30,31 @@ move items to "Resolved" rather than deleting them, so there's a record of what 
       `docs/API_DOCUMENTATION.md`'s Discovery section. The actual swipe/match logic
       itself (Like/Match models, mutual-match detection, canonical-pair uniqueness)
       is real, not mocked.
-- [ ] **Firebase Cloud Messaging (push notifications) — no credentials configured.** Not
-      implemented yet.
+- [ ] **Firebase Cloud Messaging (push notifications) — no credentials configured,
+      MOCK/TEMPORARY-deferred.** Task #6 (Notifications, see `docs/ROADMAP.md`
+      Phase 6) implemented real, non-mocked **in-app** notifications end-to-end:
+      `backend/models/Notification.js`, `GET/PATCH/PUT /api/notifications*`
+      (`backend/routes/notifications.js`), preference-gated creation at the
+      match/like/message trigger points (`backend/routes/discovery.js`,
+      `backend/routes/matches.js`, via `backend/utils/notificationUtils.js`),
+      a live `notification:new` Socket.IO event to the recipient's personal
+      `user:<id>` room (`backend/socket.js`), and a bell/badge + dropdown +
+      Settings toggles on the frontend (`frontend/src/components/
+      NotificationBell.jsx`, `frontend/src/context/NotificationContext.jsx`,
+      `frontend/src/pages/Settings.jsx`). What's still MOCK/TEMPORARY/deferred
+      is real **push** delivery via Firebase Cloud Messaging — i.e. a device
+      getting notified while the app/tab isn't open at all. No FCM
+      credentials exist yet, no device-token registration exists, and no
+      `POST` to FCM's API happens anywhere in this codebase. The
+      `notification:new` Socket.IO event only reaches a client that already
+      has an active, authenticated Socket.IO connection open — nothing here
+      simulates or fakes FCM delivery in the meantime (unlike, say, the
+      photo-upload mock below, there's no stand-in code path pretending to be
+      FCM); it's simply not built yet. Wiring real FCM would mean: adding a
+      device-token field to `users` (or a small `device_tokens` collection),
+      a registration endpoint, and calling the FCM Admin SDK from inside
+      `createNotification()` (`backend/utils/notificationUtils.js`) alongside
+      the existing Socket.IO emit.
 - [ ] **Razorpay (payments/subscriptions) — no credentials configured.** Subscription plans
       and paywall UI are planned as part of MVP, but real payment processing may ship as
       MOCK/TEMPORARY first (e.g. a fake "success" entitlement toggle) if Razorpay isn't

@@ -200,10 +200,93 @@ Socket.IO (`backend/socket.js`).
   "mark all my unread messages in this match as read" without a collection
   scan.
 
-### `notifications`
-- `_id`, `userId` (ref `users`, indexed), `type` (`LIKE`, `MATCH`, `MESSAGE`, `SYSTEM`,
-  ...), `payload` (small object, e.g. `{ fromUserId, matchId }`), `isRead`, `createdAt`
-- Indexes: compound on `(userId, isRead, createdAt)`.
+### `notifications` — `[IMPLEMENTED]`
+Implemented in `backend/models/Notification.js`; routes in
+`backend/routes/notifications.js`; created from
+`backend/routes/discovery.js` (match/like events) and
+`backend/routes/matches.js` (message events) via the shared
+`backend/utils/notificationUtils.js#createNotification()` helper.
+- `_id`, `recipient` (ref `users`, indexed — **not** `userId`, matches this
+  codebase's `ref`-naming convention already used by `Like.fromUser`/
+  `Match.userA` etc.), `type` — enum: `match`, `like`, `message`,
+  `verification`, `safety`, `subscription` (lowercase, matching the
+  `datingIntention`/`action` enum style already used elsewhere in this
+  codebase, rather than the originally-drafted `LIKE`/`MATCH`/`MESSAGE`/
+  `SYSTEM`). Only `match`, `like`, and `message` have any code path that
+  creates them in this pass — `verification`/`safety`/`subscription` are
+  reserved for later phases (Task #7+) so the schema won't need to change
+  when those land.
+  **Divergence:** `SYSTEM` was dropped in favor of the more specific
+  `verification`/`safety`/`subscription` values, which better match this
+  product's actual planned notification sources per `docs/ROADMAP.md`.
+- `payload` (`Mixed`, default `{}`) — shape varies by `type`:
+  - `match`: `{ matchId, fromUserId, fromUserName }` — the *other*
+    participant's identity, safe to reveal because a match already reveals
+    both sides to each other by definition.
+  - `like`: `{}` — **deliberately empty, no identifying fields.** "See who
+    liked you" is listed as a premium-tier reveal in `docs/BUSINESS_PLAN.md`
+    (`CG_PLUS`/`CG_PRO`/`CG_ELITE`), so a plain (non-premium) like
+    notification never carries the liker's identity — the frontend renders
+    a generic "Someone liked your profile" message from `type` alone. There
+    is no premium-reveal code path yet (Subscription/Task #10 is not
+    started); when it lands, an *additional* enriched notification/endpoint
+    for premium users can be layered on without changing this shape.
+  - `message`: `{ matchId, fromUserId, fromUserName, messageId, preview }`
+    — `preview` is the message text truncated to 140 chars.
+- `read` (bool, default `false`) — **field named `read`, not `isRead`** (no
+  particular reason beyond matching this codebase's terser boolean-field
+  style, e.g. `matches.unmatched`).
+- `createdAt` only (no `updatedAt`) — a notification is never edited in
+  place except a targeted `read` flip via `PATCH .../read` /
+  `.../read-all`, not a general update path (same pattern as
+  `likes`/`matches.unmatched`).
+- Indexes: compound on `(recipient, createdAt)` — the actual "my
+  notifications, newest first" access pattern (`GET /api/notifications`);
+  compound on `(recipient, read)` — "my unread notifications" /
+  unread-count lookups (`GET /api/notifications/unread-count`,
+  `PATCH /api/notifications/read-all`) without a collection scan.
+  **Divergence:** two separate two-field indexes instead of one three-field
+  `(userId, isRead, createdAt)` compound index — both actual access patterns
+  (`GET /api/notifications` sorted by `createdAt`, and unread-only lookups
+  filtered by `read`) are each fully served by one of the two indexes on
+  their own; a single three-field index would only help the unread+sorted
+  case and not "all notifications, sorted", so two indexes cover both
+  queries as well as one would have covered only the unread one.
+
+### `notification_preferences` — not a separate collection; fields on `users`
+Per-type in-app notification opt-out toggles (Task #6). **Divergence from
+the original draft's implicit separate-collection framing:** implemented as
+a `notificationPreferences` sub-document directly on `users`
+(`backend/models/User.js`) rather than its own collection — same
+simplification rationale already used for `admin_users` (role field on
+`users`) — a 1:1-with-`users`, always-fetched-together settings blob doesn't
+need its own document.
+- `users.notificationPreferences.matchNotifications` (bool, default `true`)
+- `users.notificationPreferences.likeNotifications` (bool, default `true`)
+- `users.notificationPreferences.messageNotifications` (bool, default `true`)
+- **Deliberately no field exists for disabling `verification`/`safety`/
+  `subscription` notifications** — those types are not user-toggleable at
+  all (see `backend/constants/notificationOptions.js`'s
+  `PREFERENCE_FIELD_BY_TYPE`); safety/account-critical notifications must
+  always be delivered. No code path creates those types yet, so this is
+  future-proofing, not a currently-enforced gate.
+- Read/written via `GET`/`PUT /api/notifications/preferences`; enforced at
+  notification-creation time by
+  `backend/utils/notificationUtils.js#isNotificationTypeEnabled()` — a
+  disabled type is silently skipped (no `Notification` document is created,
+  no error surfaced to the action that would have triggered it).
+
+### Real-time delivery — `[IMPLEMENTED, MOCK/TEMPORARY push deferred]`
+`notification:new` is emitted over the same Socket.IO server used for chat
+(`backend/socket.js`) to the recipient's personal `user:<id>` room (every
+connected socket auto-joins its own on connect) whenever
+`createNotification()` creates a document — see
+`docs/API_DOCUMENTATION.md`'s Notifications section for the event contract.
+**Real push notifications (Firebase Cloud Messaging) are MOCK/TEMPORARY —
+not implemented at all in this pass, no FCM credentials configured yet.**
+In-app notifications (this collection + the socket event + the frontend
+bell/dropdown) are fully real; only off-app push delivery to a device that
+doesn't have the app open is deferred. See `MOCK_FEATURES.md`.
 
 ### `reports`
 - `_id`, `reporterId` (ref `users`), `reportedUserId` (ref `users`, indexed),

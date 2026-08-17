@@ -69,9 +69,22 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
       `messages` divergence note)
 
 ### Notifications
-- [ ] Notification schema + API
-- [ ] Match / like / message notification events
-- [ ] Basic in-app notification center
+- [x] Notification schema + API (`backend/models/Notification.js`,
+      `backend/routes/notifications.js` — `GET /api/notifications`,
+      `GET .../unread-count`, `PATCH .../:id/read`, `PATCH .../read-all`,
+      `GET`/`PUT .../preferences`)
+- [x] Match / like / message notification events (created from
+      `backend/routes/discovery.js` and `backend/routes/matches.js` via
+      `backend/utils/notificationUtils.js`, preference-gated per user; "who
+      liked you" identity deliberately withheld from `like` notifications —
+      premium-gated reveal, see `docs/BUSINESS_PLAN.md`) + live
+      `notification:new` Socket.IO event
+- [x] Basic in-app notification center (`frontend/src/components/
+      NotificationBell.jsx` bell/badge + dropdown, `frontend/src/context/
+      NotificationContext.jsx`) and a minimal Settings page
+      (`frontend/src/pages/Settings.jsx`) for per-type toggles
+- [ ] Real push notifications (Firebase Cloud Messaging) — MOCK/TEMPORARY/
+      deferred, no credentials configured yet, see `MOCK_FEATURES.md`
 
 ### Verification
 - [ ] Mobile OTP verification (shared with signup)

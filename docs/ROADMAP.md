@@ -12,7 +12,7 @@ as of 2026-08-17 and should be updated as phases progress.
 | 3 | Location & Discovery | MVP | **Complete (MVP subset)** | City/district capture and discovery feed with pagination + basic filters implemented; geospatial "near me" filtering not yet populated (see `MOCK_FEATURES.md`). |
 | 4 | Matching (Like/Pass/Match) | MVP | **Complete (MVP subset)** | Like/pass API, mutual-match detection, match creation, match modal implemented; unmatch and "who liked you" not yet built. |
 | 5 | Real-Time Chat | MVP | **Complete** | Socket.IO setup (JWT-authed handshake), Message schema (Match doubles as the conversation — see `docs/DATABASE_SCHEMA.md`), real-time text chat UI, basic read receipts + typing indicator. Text-only for this pass (image/voice deferred to V2, see `MOCK_FEATURES.md`). |
-| 6 | Notifications | MVP | Not Started | Notification schema/API, match/like/message events, in-app notification center. |
+| 6 | Notifications | MVP | **Complete (in-app; FCM push MOCK/TEMPORARY-deferred)** | Notification schema/API (`backend/models/Notification.js`, `backend/routes/notifications.js`), match/like/message creation events with preference-gating, live `notification:new` Socket.IO event, in-app notification bell/dropdown + Settings preferences UI implemented; real Firebase Cloud Messaging push delivery not implemented (no credentials yet, see `MOCK_FEATURES.md`). |
 | 7 | Verification | MVP | Not Started | Mobile OTP + selfie/photo verification, verification badges. |
 | 8 | Safety (Report/Block/Safety Center) | MVP | Not Started | Report and block flows, Safety Center screen. |
 | 9 | Admin Panel (basic) | MVP | Not Started | Role field + role-gated `/admin` routes, reports queue, verification review, suspend/ban, audit logging. |

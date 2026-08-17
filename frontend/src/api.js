@@ -132,3 +132,35 @@ export function markMessagesRead(matchId) {
     auth: true,
   });
 }
+
+// --- Notifications (Task #6) ------------------------------------------------
+// REST is the read/mark-read path; live delivery of new notifications is via
+// the shared Socket.IO connection's 'notification:new' event (see
+// frontend/src/context/NotificationContext.jsx).
+
+export function getNotifications({ page, limit } = {}) {
+  return request(`/api/notifications${toQueryString({ page, limit })}`, {
+    method: 'GET',
+    auth: true,
+  });
+}
+
+export function getUnreadNotificationCount() {
+  return request('/api/notifications/unread-count', { method: 'GET', auth: true });
+}
+
+export function markNotificationRead(id) {
+  return request(`/api/notifications/${id}/read`, { method: 'PATCH', auth: true });
+}
+
+export function markAllNotificationsRead() {
+  return request('/api/notifications/read-all', { method: 'PATCH', auth: true });
+}
+
+export function getNotificationPreferences() {
+  return request('/api/notifications/preferences', { method: 'GET', auth: true });
+}
+
+export function updateNotificationPreferences(prefs) {
+  return request('/api/notifications/preferences', { method: 'PUT', body: prefs, auth: true });
+}
