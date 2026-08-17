@@ -82,9 +82,20 @@ function Dashboard() {
           </div>
         )}
 
-        <p className="mb-6 text-sm text-text-secondary">
-          Discovery, matching, and chat are coming in a future update.
-        </p>
+        <div className="mb-4 grid grid-cols-2 gap-3">
+          <Link to="/discover">
+            <Button variant="secondary" className="w-full">
+              Discover
+            </Button>
+          </Link>
+          <Link to="/matches">
+            <Button variant="secondary" className="w-full">
+              Matches
+            </Button>
+          </Link>
+        </div>
+
+        <p className="mb-6 text-sm text-text-secondary">Chat is coming in a future update.</p>
         <Button variant="ghost" className="w-full" onClick={handleLogout}>
           Log out
         </Button>

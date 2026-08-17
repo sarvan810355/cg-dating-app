@@ -173,27 +173,96 @@ strings, most-impactful first, e.g. `"Add a bio to improve your profile"`),
 - `DELETE /api/profile/me/photos/:photoId` — photo removal — not built yet, only
   add is implemented.
 
-## 3. Discovery — `[PLANNED]`
+## 3. Discovery — `[IMPLEMENTED]`
 
-Base path: `/api/discovery`
+Base path: `/api/discovery`. All routes require auth. Routes in
+`backend/routes/discovery.js`.
 
-- `GET /api/discovery/feed?page=&limit=&datingIntention=&maxDistanceKm=` — auth
-  required — returns a paginated list of candidate profiles filtered by the caller's
-  preferences, excluding already-liked/passed/blocked users.
-  - Response: `{ "profiles": [ ... ], "page": 1, "hasMore": true }`
+### `GET /api/discovery/feed`
+- **Query params (all optional):** `page` (default `1`), `limit` (default `10`,
+  capped at `20`), `datingIntention` (must be one of the `datingIntention` enum —
+  see `docs/DATABASE_SCHEMA.md`), `city` (case-insensitive exact match).
+  **Divergence from the original draft:** `maxDistanceKm` is not implemented —
+  `profiles.location` still isn't populated by any UI, so there's no geo data to
+  filter on yet; see the `preferences` divergence note in
+  `docs/DATABASE_SCHEMA.md`.
+- Excludes: the caller, anyone the caller has already swiped on (like or pass —
+  either decision means "don't show again"), and anyone the caller is already
+  matched with. Profiles missing `displayName`/`dateOfBirth`/`gender` (i.e. not
+  complete enough to be worth showing) are also excluded.
+- **Not yet implemented:** blocking — `backend/routes/discovery.js` has a `TODO`
+  where blocked-user exclusion will go once the Block model exists (Report/Block
+  is a separate, later task; see `TODO.md`).
+- **Success response:** `200 OK` —
+  `{ "profiles": [ <public profile, see docs/API_DOCUMENTATION.md's Profile section> ], "page": 1, "hasMore": true }`
+- **Errors:** `400` — invalid `datingIntention`; `404` — caller has no profile yet
+  (`{ "message": "Create your profile before browsing discovery" }`); `401`; `500`.
 
-## 4. Matching — `[PLANNED]`
+### `POST /api/discovery/swipe`
+- **Request body:** `{ "toUserId": "<userId>", "action": "like" | "pass" }`
+- Records the swipe; if `action` is `"like"` and the other user already liked the
+  caller back, also creates a `match` (see the Matching section below) — this is
+  the only path a match is ever created from.
+- **Validation:** `toUserId` must be a valid id and cannot be the caller's own id;
+  both the caller and the target must already have a profile (18+ is already a
+  hard requirement enforced at profile creation/update time — see the Profile
+  section — so it's not re-checked here).
+- **Repeat-swipe handling (never an ugly 500):**
+  - Same `toUserId` + same `action` as an existing swipe → idempotent, `200 OK`,
+    `{ "like": {...}, "alreadySwiped": true, "matchCreated": false, "match": null | {...} }`
+    (returns the current match state, in case the caller retries after a match
+    already happened).
+  - Same `toUserId` + a *different* `action` (e.g. already liked, now trying to
+    pass) → `409 Conflict`,
+    `{ "message": "You already swiped 'like' on this user", "like": {...} }` — the
+    original decision is preserved, never silently overwritten.
+  - A concurrent duplicate request (race) is caught by the same `(fromUser,
+    toUser)` unique index and also returns `409` with the winning swipe's state.
+- **Success response:** `201 Created` —
+  `{ "like": { "id", "fromUserId", "toUserId", "action", "createdAt" }, "matchCreated": true|false, "match": { "id", "users", "matchedAt" } | null }`
+- **Errors:** `400` — invalid `toUserId`/`action`, or swiping on yourself; `404` —
+  caller or target has no profile; `409` — see above; `401`; `500`.
 
-Base path: `/api/likes`, `/api/matches`
+## 4. Matching — `[IMPLEMENTED, list only — unmatch not yet built]`
 
-- `POST /api/likes` — auth required — body `{ "toUserId", "type": "LIKE"|"SUPER_LIKE"|"PASS" }`
-  — creates a like/pass; if it completes a mutual `LIKE`, also creates a `match` and
-  returns it.
-  - Response: `{ "like": { ... }, "match": { ... } | null }`
-- `GET /api/matches` — auth required — list the caller's active matches.
-- `GET /api/likes/received` — auth required, premium-gated ("see who liked you") —
-  list users who liked the caller.
-- `DELETE /api/matches/:matchId` — auth required, must be a participant — unmatch.
+Base path: `/api/matches`. Match *creation* happens as a side effect of
+`POST /api/discovery/swipe` above, not a separate endpoint — see the divergence
+note below. Routes in `backend/routes/matches.js`.
+
+### `GET /api/matches`
+- **Query params (optional):** `page` (default `1`), `limit` (default `20`, capped
+  at `50`).
+- Returns the caller's active (`unmatched: false`) matches, newest first, each
+  with the other participant's basic profile info attached for a match-list card
+  (`displayName`, `age`, `city`, `district`, `datingIntention`, primary `photo`
+  URL).
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "matches": [
+      {
+        "id": "...",
+        "matchedAt": "...",
+        "otherUser": { "userId", "displayName", "age", "city", "district", "datingIntention", "photo" }
+      }
+    ],
+    "page": 1,
+    "hasMore": false
+  }
+  ```
+- **Errors:** `401`; `500`.
+
+### Divergence from the original draft
+- No separate `POST /api/likes` endpoint — swiping (like *and* pass) is unified
+  under `POST /api/discovery/swipe` (see above) instead of a `/api/likes` base
+  path, since a swipe is fundamentally a discovery-flow action; match creation is
+  a side effect of that one call rather than a caller needing to inspect the
+  response of a separate likes endpoint.
+- `GET /api/likes/received` ("who liked you") and `DELETE /api/matches/:matchId`
+  (unmatch) are **not yet implemented** — out of scope for this MVP swipe/match
+  pass; "who liked you" is typically a premium-gated feature anyway (see
+  `docs/BUSINESS_PLAN.md`) and unmatch can follow once basic matching is proven
+  end-to-end against a real database.
 
 ## 5. Messaging — `[PLANNED]`
 

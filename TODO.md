@@ -22,7 +22,9 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
       doc; real Cloudinary integration still not wired up, see MOCK_FEATURES.md)
 - [x] Bio + interests + prompts editing
 - [ ] Preferences (age range, distance, gender preference, dating intention filter) —
-      deferred to Task #4 (Discovery); `interestedIn`/`datingIntention` already live
+      **still not a persisted collection** after Task #4; Discovery instead accepts
+      `datingIntention`/`city` as ad-hoc query params (see docs/DATABASE_SCHEMA.md's
+      `preferences` divergence note); `interestedIn`/`datingIntention` already live
       on the Profile itself
 - [x] Profile strength / completeness score (`profileCompletionPercentage` +
       `completionHints`, computed server-side)
@@ -37,14 +39,20 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
       Task #4 (Discovery)
 
 ### Discovery
-- [ ] Discovery feed API with pagination
-- [ ] Discovery feed UI (card stack or list)
-- [ ] Basic filters (age range, distance, dating intention)
+- [x] Discovery feed API with pagination (`GET /api/discovery/feed`, page-based)
+- [x] Discovery feed UI (`frontend/src/pages/Discovery.jsx` — card + Like/Pass
+      buttons, loads more as the queue runs low)
+- [x] Basic filters (`datingIntention`, `city`) — age range / distance filters
+      deferred, see the `preferences` item above and `docs/API_DOCUMENTATION.md`
 
 ### Like / Pass / Match
-- [ ] Like/Pass API
-- [ ] Mutual-like match detection
-- [ ] Match creation + match animation/screen
+- [x] Like/Pass API (`POST /api/discovery/swipe`)
+- [x] Mutual-like match detection (canonical-pair unique index, race-safe —
+      see `backend/utils/matchUtils.js` and `backend/models/Match.js`)
+- [x] Match creation + match screen (`frontend/src/components/MatchModal.jsx`
+      "It's a Match!" modal); `GET /api/matches` list + `frontend/src/pages/
+      Matches.jsx`; unmatch (`DELETE /api/matches/:matchId`) and "who liked you"
+      not yet implemented
 
 ### Chat
 - [ ] Socket.IO server setup

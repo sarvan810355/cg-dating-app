@@ -16,6 +16,19 @@ export function clearToken() {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+// Builds a `?key=value&...` query string, skipping undefined/null/empty
+// values so callers can pass a params object without pre-filtering it.
+function toQueryString(params = {}) {
+  const usp = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') {
+      usp.set(key, value);
+    }
+  });
+  const qs = usp.toString();
+  return qs ? `?${qs}` : '';
+}
+
 async function request(path, { method = 'GET', body, auth = false } = {}) {
   const headers = { 'Content-Type': 'application/json' };
 
@@ -69,4 +82,25 @@ export function addProfilePhoto({ url, imageBase64, mimeType }) {
     body: url ? { url } : { imageBase64, mimeType },
     auth: true,
   });
+}
+
+// --- Discovery + Matching (Task #4) ---------------------------------------
+
+export function getDiscoveryFeed({ page, limit, datingIntention, city } = {}) {
+  return request(`/api/discovery/feed${toQueryString({ page, limit, datingIntention, city })}`, {
+    method: 'GET',
+    auth: true,
+  });
+}
+
+export function swipe(toUserId, action) {
+  return request('/api/discovery/swipe', {
+    method: 'POST',
+    body: { toUserId, action },
+    auth: true,
+  });
+}
+
+export function getMatches({ page, limit } = {}) {
+  return request(`/api/matches${toQueryString({ page, limit })}`, { method: 'GET', auth: true });
 }

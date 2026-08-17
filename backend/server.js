@@ -7,6 +7,8 @@ const mongoose = require('mongoose');
 const healthRouter = require('./routes/health');
 const authRouter = require('./routes/auth');
 const profileRouter = require('./routes/profile');
+const discoveryRouter = require('./routes/discovery');
+const matchesRouter = require('./routes/matches');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -21,6 +23,8 @@ app.use(express.json({ limit: '10mb' }));
 app.use('/api/health', healthRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/profile', profileRouter);
+app.use('/api/discovery', discoveryRouter);
+app.use('/api/matches', matchesRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'CG Dating API' });

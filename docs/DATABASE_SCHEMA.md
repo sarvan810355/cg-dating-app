@@ -97,11 +97,15 @@ is introduced later (e.g. for interest-based discovery filtering/autocomplete).
 - `_id`, `name` (unique), `category`, `isActive`
 - Indexes: unique on `name`.
 
-### `preferences` — `[PLANNED]`, deferred to Task #4 (Discovery)
-Discovery/matching preferences, 1:1 with `users`. Not part of the Task #3 (Profile)
-implementation — `interestedIn` (who to meet) lives on `profiles` instead, but the
-numeric filters below (age range, distance, etc.) are discovery-time concerns and
-will land with Task #4.
+### `preferences` — `[PLANNED]`, still deferred past Task #4 (Discovery)
+Discovery/matching preferences, 1:1 with `users`. **Still not implemented as a
+persisted collection.** Task #4 (Discovery) shipped basic ad-hoc filtering
+instead — `GET /api/discovery/feed?datingIntention=&city=` accepts these as
+per-request query params rather than a saved, editable preferences record. Age
+range, distance/geo-radius (`profiles.location` is still not populated by any
+UI — see the `profiles` section above), and a persisted `showMeOnDiscovery`
+toggle are all still not built; a dedicated `preferences` collection (or fields
+folded onto `profiles`) remains future scope if/when saved filters are needed.
 - `_id`, `userId` (ref `users`, unique), `ageMin`, `ageMax`, `genderPreference`,
   `distanceKm`, `datingIntentionFilter`, `showMeOnDiscovery` (bool)
 - Indexes: unique on `userId`.
@@ -113,17 +117,45 @@ an admin-editable collection.
 - `_id`, `text`, `category`, `isActive`
 - Indexes: index on `isActive`.
 
-### `likes`
-- `_id`, `fromUserId` (ref `users`, indexed), `toUserId` (ref `users`, indexed),
-  `type` (`LIKE`, `SUPER_LIKE`, `PASS`), `createdAt`
-- Indexes: unique compound on `(fromUserId, toUserId)`; index on `toUserId` (for
-  "who liked you").
+### `likes` — `[IMPLEMENTED]`
+Implemented in `backend/models/Like.js`; routes in `backend/routes/discovery.js`.
+Records a single swipe decision (not just likes — passes too, so a candidate is
+never re-shown once decided on).
+- `_id`, `fromUser` (ref `users`, indexed), `toUser` (ref `users`, indexed),
+  `action` — enum: `like`, `pass` (only `createdAt` timestamp, no `updatedAt` — a
+  swipe is a point-in-time decision, never edited in place).
+  **Divergence from the original draft:** fields renamed `fromUserId`/`toUserId`
+  → `fromUser`/`toUser` (matches the `Profile.user` ref-naming convention already
+  in the codebase) and `type` → `action`; the enum is `like`/`pass` (lowercase,
+  two values) rather than `LIKE`/`SUPER_LIKE`/`PASS` — `SUPER_LIKE` is out of
+  scope for this MVP pass and can be added as a third `action` value later
+  without a schema shape change.
+- Indexes: unique compound on `(fromUser, toUser)` — this is both the "no
+  duplicate swipe" integrity constraint and the lookup used for mutual-like
+  detection; compound index on `(toUser, action)` for "who liked me" lookups.
 
-### `matches`
-Created when two users mutually like each other.
-- `_id`, `userAId`, `userBId` (both ref `users`, order-independent pair, indexed),
-  `matchedAt`, `status` (`ACTIVE`, `UNMATCHED`), `unmatchedBy` (ref `users`, nullable)
-- Indexes: unique compound on `(userAId, userBId)`; index on each user id.
+### `matches` — `[IMPLEMENTED]`
+Implemented in `backend/models/Match.js`; routes in `backend/routes/matches.js`
+(list) and `backend/routes/discovery.js` (creation, on a mutual like).
+- `_id`, `userA`, `userB` (both ref `users`) — the pair stored in **canonical
+  order** (ascending id string, computed by `backend/utils/matchUtils.js`'s
+  `canonicalPair()` in a `pre('validate')` hook) so the same two users always
+  map to the same document regardless of which direction the mutual like
+  completed in, `users` (array mirroring `[userA, userB]`, the field most
+  callers actually query against — e.g. "matches involving me"), `matchedAt`,
+  `unmatched` (bool, default `false`), `unmatchedAt`, `unmatchedBy` (ref `users`,
+  nullable).
+  **Divergence from the original draft:** `userAId`/`userBId` → `userA`/`userB`
+  (ref-naming convention) plus the `users` convenience array; `status`
+  (`ACTIVE`/`UNMATCHED`) replaced with a plain `unmatched` boolean +
+  `unmatchedAt` timestamp — simpler for MVP, and matches the literal shape from
+  the Task #4 product spec (`{ users, createdAt, unmatched }`). Unmatch
+  (`DELETE /api/matches/:matchId`) itself is not yet implemented — only match
+  creation and listing shipped in this pass; see `docs/API_DOCUMENTATION.md`.
+- Indexes: unique compound on `(userA, userB)` — the actual duplicate-match
+  guard, race-safe because both swipe directions canonicalize to the identical
+  pair before insert; index on `users` (array) for "all matches involving this
+  user" queries.
 
 ### `conversations`
 - `_id`, `matchId` (ref `matches`, unique), `participantIds` (array, ref `users`),

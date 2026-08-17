@@ -10,6 +10,110 @@ next task that follows from it.
 
 ---
 
+## 2026-08-17 — Discovery + Matching (Task #4) implemented
+
+- **Phase:** Phase 3 — Discovery + Matching
+- **Task:** Swipe-based discovery feed with pagination/basic filters, Like/Pass
+  API, mutual-like match detection with race-safe duplicate-match prevention,
+  matches list, and the corresponding frontend (Discovery card stack, "It's a
+  Match!" modal, Matches list, chat-coming-soon placeholder).
+- **Backend files touched:** `backend/models/Like.js` (new — `fromUser`,
+  `toUser`, `action` (`like`/`pass`), unique compound index on
+  `(fromUser, toUser)`), `backend/models/Match.js` (fleshed out from the
+  placeholder — `userA`/`userB` stored in canonical/sorted order via a
+  `pre('validate')` hook so a compound unique index on `(userA, userB)` can
+  prevent duplicate matches regardless of which direction the mutual like
+  completed in; `users` convenience array kept for "matches involving me"
+  queries; `isActive` replaced with `unmatched`/`unmatchedAt`/`unmatchedBy` per
+  the product spec), `backend/utils/matchUtils.js` (new — pure, DB-independent
+  `canonicalPair()`/`isMutualLike()` helpers, shared by the Match model and the
+  swipe route, and directly unit-tested), `backend/constants/
+  discoveryOptions.js` (new — `SWIPE_ACTIONS`, feed/matches pagination
+  defaults), `backend/utils/profileSerializers.js` (new — `toOwnProfileJSON`/
+  `toPublicProfileJSON` extracted out of `routes/profile.js` so discovery feed
+  cards and match listings can reuse the exact same "public profile" shape
+  instead of duplicating field lists; `routes/profile.js` behavior is
+  unchanged, just its serializers moved), `backend/routes/discovery.js` (new —
+  `GET /feed` with page-based pagination + `datingIntention`/`city` filters,
+  excluding self/already-swiped/already-matched users, with a `TODO` for
+  blocked-user exclusion once the Block model exists in a later task;
+  `POST /swipe` records a like/pass, handles repeat-swipe as idempotent-200 vs.
+  409-conflict rather than an ugly error, and creates a Match on mutual like
+  with race-safety via the canonical-pair unique index), `backend/routes/
+  matches.js` (new — `GET /` lists the caller's active matches with the other
+  participant's basic profile info attached), `backend/server.js` (mounted
+  `/api/discovery` and `/api/matches`).
+- **Frontend files touched:** `frontend/src/pages/Discovery.jsx` (new — card
+  stack with Like/Pass buttons, prefetches the next page as the queue runs
+  low, shows `MatchModal` on a mutual match), `frontend/src/pages/
+  Matches.jsx` (new — match list using `Avatar`/`Button`, links to a
+  chat-coming-soon placeholder per Task #5 not having run yet),
+  `frontend/src/pages/ChatComingSoon.jsx` (new — placeholder landing spot for
+  a match's conversation), `frontend/src/components/MatchModal.jsx` (new —
+  "It's a Match!" modal, clean/fast per `docs/DESIGN_SYSTEM.md`'s direction,
+  "Start a conversation" CTA routes to `/matches` since chat isn't built),
+  `frontend/src/pages/Dashboard.jsx` (added Discover/Matches nav links),
+  `frontend/src/App.jsx` (new `/discover`, `/matches`, `/chat/:matchId`
+  protected routes), `frontend/src/api.js` (added `getDiscoveryFeed`/`swipe`/
+  `getMatches`, plus a small `toQueryString` helper).
+- **Doc updates:** `docs/DATABASE_SCHEMA.md` (`likes` and `matches` sections
+  moved from bare drafts to `[IMPLEMENTED]` with divergence notes — field
+  renames to match the `Profile.user` ref convention, `action` enum
+  simplified to `like`/`pass` (no `SUPER_LIKE` yet), `status` replaced with
+  `unmatched`; `preferences` section updated to note it's still not a
+  persisted collection — Discovery uses ad-hoc query params instead);
+  `docs/API_DOCUMENTATION.md` (Discovery and Matching sections moved to
+  `[IMPLEMENTED]` with full request/response/validation detail and explicit
+  divergence notes — no separate `/api/likes` base path, `maxDistanceKm` not
+  implemented, unmatch/"who liked you" not yet built); `MOCK_FEATURES.md`
+  (noted the geo/distance-filtering gap — not a mock, a documented scope
+  reduction, since the actual swipe/match logic is real); `TODO.md` (checked
+  off Discovery feed API/UI, basic filters, Like/Pass API, mutual-match
+  detection, match creation/screen; left unmatch and "who liked you" open).
+- **Tests performed:**
+  - Backend: `node -e "require(...)"` smoke-loaded every model and route file
+    (no syntax/import errors). Started the server (`node server.js`) and
+    confirmed it boots cleanly with the same non-fatal "MongoDB connection
+    error, continuing without a database connection" pattern as prior phases
+    — not a regression. Curled the new endpoints: `GET /api/discovery/feed`,
+    `POST /api/discovery/swipe`, `GET /api/matches` all return `401` with no
+    Authorization header, and `GET /api/discovery/feed` with a bogus token
+    returns the correct `{"message":"Invalid or expired token"}` — confirms
+    `requireAuth` is correctly wired onto all three new routes. Verified the
+    pure business logic that doesn't need a live DB with a standalone Node
+    script (`/tmp/.../verify_matching_logic.js`, run against the real
+    `Like`/`Match` model files and `matchUtils.js`, no mongoose connection):
+    canonical pair ordering is order-independent; the `Match` model
+    canonicalizes `userA`/`userB` identically regardless of construction
+    order (verified via the real async `.validate()` path — note:
+    `validateSync()` does **not** run `pre('validate')` middleware in this
+    mongoose version, confirmed directly, so the script deliberately uses
+    `.validate()`, which is also the only path the real app ever exercises via
+    `.save()`); the `users`-array-length validator; `Like` schema enum/required
+    validation; and a simulated end-to-end swipe flow (mutual like -> exactly
+    one match, identical repeat swipe -> idempotent 200 not a new match,
+    different repeat swipe -> 409 with the original decision preserved,
+    unreciprocated third-party like -> no match, both swipe directions
+    resolve to the identical canonical pair key) — 24/24 checks passed.
+  - Frontend: `npm run build` succeeded; `npm run lint` (oxlint) passed with
+    only the same pre-existing, unrelated `AuthContext.jsx` warning already
+    noted in the Task #3 entry below.
+- **Known limitation carried forward:** end-to-end DB-backed testing (create
+  two accounts+profiles, swipe both directions, confirm exactly one Match
+  document is created even under a simulated race, list matches, browse a
+  filtered discovery feed against real seeded data) was not possible in this
+  sandbox for the same reason prior phases couldn't verify it either — no
+  reachable MongoDB. The compound unique indexes on `Like` and `Match` are
+  schema-correct and their canonicalization logic is unit-tested, but have
+  never been exercised against an actual MongoDB write conflict. This should
+  be the first thing verified in an environment that does have DB access.
+- **Next task:** Task #5 — Chat (Socket.IO server setup, Conversation +
+  Message schemas — `Message` already exists as a placeholder needing the
+  same treatment `Match` just got — real-time text chat UI, basic read
+  receipts/delivery status). Wire it in place of `ChatComingSoon.jsx`.
+
+---
+
 ## 2026-08-17 — Profile system (Task #3) implemented
 
 - **Phase:** Phase 2 — Profile System

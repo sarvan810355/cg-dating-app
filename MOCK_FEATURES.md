@@ -22,6 +22,14 @@ move items to "Resolved" rather than deleting them, so there's a record of what 
       Cloudinary -> store the returned secure URL only) before this ships to real
       users; when that happens, also revisit `backend/server.js`'s bumped 10mb JSON
       body limit (added only to allow base64 payloads through this mock path).
+- [ ] **Discovery has no geo/distance filtering yet — not a mock, a scope gap.**
+      `GET /api/discovery/feed` (`backend/routes/discovery.js`, Task #4) only filters
+      by `datingIntention` and an exact-ish `city` match; `profiles.location` still
+      isn't populated by any UI (unchanged from the Task #3 note), so there's no
+      `maxDistanceKm`/"near me" filtering yet — see the divergence note in
+      `docs/API_DOCUMENTATION.md`'s Discovery section. The actual swipe/match logic
+      itself (Like/Match models, mutual-match detection, canonical-pair uniqueness)
+      is real, not mocked.
 - [ ] **Firebase Cloud Messaging (push notifications) — no credentials configured.** Not
       implemented yet.
 - [ ] **Razorpay (payments/subscriptions) — no credentials configured.** Subscription plans

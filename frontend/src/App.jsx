@@ -4,6 +4,9 @@ import Signup from './pages/Signup';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import ProfileBuilder from './pages/ProfileBuilder';
+import Discovery from './pages/Discovery';
+import Matches from './pages/Matches';
+import ChatComingSoon from './pages/ChatComingSoon';
 import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
@@ -25,6 +28,30 @@ function App() {
         element={
           <ProtectedRoute>
             <ProfileBuilder />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/discover"
+        element={
+          <ProtectedRoute>
+            <Discovery />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/matches"
+        element={
+          <ProtectedRoute>
+            <Matches />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/chat/:matchId"
+        element={
+          <ProtectedRoute>
+            <ChatComingSoon />
           </ProtectedRoute>
         }
       />

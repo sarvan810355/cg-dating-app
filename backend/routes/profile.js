@@ -3,7 +3,8 @@ const mongoose = require('mongoose');
 
 const Profile = require('../models/Profile');
 const { requireAuth } = require('../middleware/auth');
-const { isAtLeastMinAge, getCompletionHints } = require('../utils/profileUtils');
+const { isAtLeastMinAge } = require('../utils/profileUtils');
+const { toOwnProfileJSON, toPublicProfileJSON } = require('../utils/profileSerializers');
 const {
   MIN_AGE,
   GENDERS,
@@ -28,61 +29,9 @@ const DATA_URI_RE = /^data:image\/(png|jpeg|jpg|webp);base64,/i;
 const MAX_BASE64_LENGTH = 7 * 1024 * 1024;
 
 // --- Serialization -----------------------------------------------------
-
-// Full profile, only ever returned to its owner.
-function toOwnProfileJSON(profile) {
-  const obj = profile.toObject({ virtuals: true });
-  return {
-    id: obj._id,
-    userId: obj.user,
-    displayName: obj.displayName || null,
-    dateOfBirth: obj.dateOfBirth || null,
-    age: obj.age,
-    gender: obj.gender || null,
-    interestedIn: obj.interestedIn,
-    datingIntention: obj.datingIntention || null,
-    city: obj.city || null,
-    district: obj.district || null,
-    state: obj.state,
-    profession: obj.profession || null,
-    education: obj.education || null,
-    bio: obj.bio || null,
-    interests: obj.interests,
-    languages: obj.languages,
-    lifestyle: obj.lifestyle,
-    personalityPrompts: obj.personalityPrompts,
-    photos: obj.photos.map((p) => ({ id: p._id, url: p.url, isPrimary: p.isPrimary })),
-    profileCompletionPercentage: obj.profileCompletionPercentage,
-    completionHints: getCompletionHints(obj),
-    createdAt: obj.createdAt,
-    updatedAt: obj.updatedAt,
-  };
-}
-
-// Public view of another user's profile — deliberately a smaller field set.
-// Never includes exact geo coordinates (only city/district), the owner's
-// completion score, or anything not meant for other daters to see.
-function toPublicProfileJSON(profile) {
-  const obj = profile.toObject({ virtuals: true });
-  return {
-    userId: obj.user,
-    displayName: obj.displayName || null,
-    age: obj.age,
-    gender: obj.gender || null,
-    datingIntention: obj.datingIntention || null,
-    city: obj.city || null,
-    district: obj.district || null,
-    state: obj.state,
-    profession: obj.profession || null,
-    education: obj.education || null,
-    bio: obj.bio || null,
-    interests: obj.interests,
-    languages: obj.languages,
-    lifestyle: obj.lifestyle,
-    personalityPrompts: obj.personalityPrompts,
-    photos: obj.photos.map((p) => ({ url: p.url, isPrimary: p.isPrimary })),
-  };
-}
+// toOwnProfileJSON / toPublicProfileJSON now live in
+// backend/utils/profileSerializers.js so backend/routes/discovery.js can
+// reuse the same "public profile" shape for feed cards and match listings.
 
 // --- Validation ----------------------------------------------------------
 
