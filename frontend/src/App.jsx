@@ -1,14 +1,26 @@
+import { Routes, Route } from 'react-router-dom';
+import Landing from './pages/Landing';
+import Signup from './pages/Signup';
+import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
+import ProtectedRoute from './components/ProtectedRoute';
+
 function App() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-rose-50 to-pink-100">
-      <div className="text-center px-6">
-        <h1 className="text-5xl font-bold text-rose-600 mb-4">CG Dating</h1>
-        <p className="text-lg text-gray-600">
-          Find your match. Coming soon.
-        </p>
-      </div>
-    </div>
-  )
+    <Routes>
+      <Route path="/" element={<Landing />} />
+      <Route path="/signup" element={<Signup />} />
+      <Route path="/login" element={<Login />} />
+      <Route
+        path="/dashboard"
+        element={
+          <ProtectedRoute>
+            <Dashboard />
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
 }
 
-export default App
+export default App;

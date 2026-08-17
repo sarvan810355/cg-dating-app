@@ -5,6 +5,7 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 
 const healthRouter = require('./routes/health');
+const authRouter = require('./routes/auth');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -14,6 +15,7 @@ app.use(cors());
 app.use(express.json());
 
 app.use('/api/health', healthRouter);
+app.use('/api/auth', authRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'CG Dating API' });
