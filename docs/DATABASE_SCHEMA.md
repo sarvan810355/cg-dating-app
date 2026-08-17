@@ -157,16 +157,48 @@ Implemented in `backend/models/Match.js`; routes in `backend/routes/matches.js`
   pair before insert; index on `users` (array) for "all matches involving this
   user" queries.
 
-### `conversations`
-- `_id`, `matchId` (ref `matches`, unique), `participantIds` (array, ref `users`),
-  `lastMessageAt`, `lastMessagePreview`
-- Indexes: unique on `matchId`; index on `participantIds`.
+### `conversations` — **not implemented as a separate collection**
+**Divergence, implemented for Task #5 (Chat):** a `Match` document already
+uniquely identifies the two participants of a conversation (it's created
+exactly once per mutually-liked pair — see the `matches` section above), so
+there is no separate `conversations` collection. `Match._id` *is* the
+conversation id; messages are simply queried by `match` (see `messages`
+below). This also means there's no `lastMessageAt`/`lastMessagePreview`
+denormalized onto anything yet — `GET /api/matches` doesn't currently return
+a last-message preview (see `docs/API_DOCUMENTATION.md`'s Matching section);
+that's a reasonable follow-up if the match list needs it later, computable
+either by a cheap per-match latest-message lookup or a denormalized field
+maintained on `Match` when a message is sent.
 
-### `messages`
-- `_id`, `conversationId` (ref `conversations`, indexed), `senderId` (ref `users`),
-  `text`, `attachmentUrl` (Cloudinary, nullable), `status` (`SENT`, `DELIVERED`, `READ`),
-  `createdAt`
-- Indexes: compound on `(conversationId, createdAt)`.
+### `messages` — `[IMPLEMENTED]`
+Implemented in `backend/models/Message.js`; routes in `backend/routes/
+matches.js` (mounted under `/api/matches/:matchId/messages` — see
+`docs/API_DOCUMENTATION.md`'s Messaging section), real-time delivery via
+Socket.IO (`backend/socket.js`).
+- `_id`, `match` (ref `matches`, indexed — doubles as the conversation id,
+  see the `conversations` divergence note above), `sender` (ref `users`),
+  `recipient` (ref `users`) — **new field, not in the original minimal
+  draft** (`{ match, sender, text, createdAt, readAt }`); added so "mark all
+  messages sent *to* me in this match as read" is a single indexed query
+  instead of re-deriving "the other participant" per message on every read,
+  `text` (required, trimmed, 1-2000 chars), `readAt` (nullable `Date`,
+  `null` until read), `createdAt`, `updatedAt` (via `timestamps: true`).
+  **Divergence from the original draft:** `conversationId` → `match`
+  (matches this codebase's ref-naming convention, and there's no separate
+  Conversation collection to reference — see above); `senderId` → `sender`;
+  `status` (`SENT`/`DELIVERED`/`READ`) replaced with a plain nullable
+  `readAt` timestamp, same simplification pattern already used for
+  `matches.unmatched`/`unmatchedAt` — a message is either read or it isn't,
+  and delivery status isn't tracked separately since Socket.IO delivery is
+  fire-and-forget (no ack/retry queue) for this MVP pass; `attachmentUrl` is
+  **not implemented** — text-only messages for this pass, see
+  `MOCK_FEATURES.md`/`TODO.md` (image/voice messages are V2 scope, not a
+  mock — never built for Task #5 at all).
+- Indexes: compound on `(match, createdAt)` — the actual "paginated history
+  for this match" access pattern (see the Messaging API's newest-first
+  cursor pagination); compound on `(match, recipient, readAt)` — supports
+  "mark all my unread messages in this match as read" without a collection
+  scan.
 
 ### `notifications`
 - `_id`, `userId` (ref `users`, indexed), `type` (`LIKE`, `MATCH`, `MESSAGE`, `SYSTEM`,

@@ -95,7 +95,6 @@ function Dashboard() {
           </Link>
         </div>
 
-        <p className="mb-6 text-sm text-text-secondary">Chat is coming in a future update.</p>
         <Button variant="ghost" className="w-full" onClick={handleLogout}>
           Log out
         </Button>

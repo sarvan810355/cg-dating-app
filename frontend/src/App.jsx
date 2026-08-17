@@ -6,7 +6,7 @@ import Dashboard from './pages/Dashboard';
 import ProfileBuilder from './pages/ProfileBuilder';
 import Discovery from './pages/Discovery';
 import Matches from './pages/Matches';
-import ChatComingSoon from './pages/ChatComingSoon';
+import Chat from './pages/Chat';
 import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
@@ -51,7 +51,7 @@ function App() {
         path="/chat/:matchId"
         element={
           <ProtectedRoute>
-            <ChatComingSoon />
+            <Chat />
           </ProtectedRoute>
         }
       />

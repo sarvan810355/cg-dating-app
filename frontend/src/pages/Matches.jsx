@@ -64,9 +64,12 @@ function Matches() {
           <ul className="space-y-3">
             {matches.map((m) => (
               <li key={m.id}>
-                {/* Chat (Task #5) isn't built yet — this routes to a
-                    "coming soon" placeholder, per the design system's
-                    "fast not long" direction rather than a dead end. */}
+                {/* Opens the real chat screen (Task #5) for this match — see
+                    frontend/src/pages/Chat.jsx. Per-match last-message
+                    preview / unread badges aren't wired into this list yet
+                    (would need GET /api/matches to return that data); left
+                    for a future pass so this task stays focused on chat
+                    itself working end-to-end. */}
                 <Link
                   to={`/chat/${m.id}`}
                   className="flex items-center gap-3 rounded-xl border border-border bg-surface p-3 transition hover:bg-primary-subtle"

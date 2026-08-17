@@ -10,6 +10,148 @@ next task that follows from it.
 
 ---
 
+## 2026-08-17 — Chat (Task #5) implemented
+
+- **Phase:** Phase 5 — Real-Time Chat
+- **Task:** Real-time messaging between matched users: fleshed out the `Message`
+  model, REST history/send/read-receipt endpoints nested under
+  `/api/matches/:matchId/messages`, a Socket.IO real-time layer sharing the
+  Express HTTP server with JWT handshake auth, typing indicators, and a full
+  chat UI replacing the `ChatComingSoon.jsx` placeholder.
+- **Design decisions (see doc updates below for full detail):** no separate
+  `Conversation` collection — a `Match` already uniquely identifies a
+  two-person conversation, so messages are queried by `match` directly;
+  REST is the single write path for messages (`POST` persists, then emits
+  `message:new` via Socket.IO to the match's room) rather than also
+  accepting a `message:send` socket event, so there is exactly one code
+  path that can ever create a `Message`; newest-first cursor pagination
+  (`before=<messageId>`) for message history, chosen over offset pagination
+  because it stays correct under concurrent inserts while scrolling back;
+  read receipts persist via a REST `PATCH` (not a socket event) for the
+  same single-write-path reason, but still broadcast a `message:read`
+  socket event so the sender's UI updates live.
+- **Backend files touched:** `backend/models/Message.js` (fleshed out from
+  the placeholder — `match`/`sender`/`recipient`/`text`/`readAt`, required
+  + trimmed + 1-2000-char text validation, compound indexes on
+  `(match, createdAt)` and `(match, recipient, readAt)`),
+  `backend/constants/chatOptions.js` (new — `MAX_MESSAGE_LENGTH`,
+  pagination defaults, same convention as `discoveryOptions.js`),
+  `backend/utils/matchUtils.js` (added `isParticipant()`/
+  `otherParticipant()` — pure, DB-independent, shared by the REST message
+  routes' authorization check and the Socket.IO `match:join` handler so
+  both transports enforce identical rules), `backend/middleware/auth.js`
+  (extracted `verifyToken()` out of `requireAuth` so socket auth can reuse
+  the exact same JWT-verification logic instead of duplicating
+  secret-handling), `backend/socket.js` (new — `initSocket()`: JWT
+  handshake auth via the shared `verifyToken()`, `match:join`/`match:leave`
+  room management with the same participant/unmatched authorization the
+  REST routes use, ephemeral `typing:start`/`typing:stop` ->  `typing`
+  re-broadcast, `roomName()` helper shared with `routes/matches.js`),
+  `backend/routes/matches.js` (added `GET`/`POST /:matchId/messages` and
+  `PATCH /:matchId/messages/read`, plus a shared `loadAuthorizedMatch()`
+  helper — 400 invalid id, 404 no match, 403 not-a-participant, 403
+  unmatched), `backend/server.js` (now creates an `http.Server`, mounts
+  Socket.IO on it via `initSocket()`, attaches `io` to the Express app via
+  `app.set('io', io)` so route handlers can broadcast after a REST write),
+  `backend/package.json` (added `socket.io`).
+- **Frontend files touched:** `frontend/src/pages/Chat.jsx` (new — replaces
+  `ChatComingSoon.jsx` on the `/chat/:matchId` route; loads history via
+  REST on mount, connects + authenticates a Socket.IO client, joins the
+  match's room, listens for `message:new`/`typing`/`message:read`, sends
+  via REST, auto-scrolls, shows a typing indicator, "load older messages"
+  button using cursor pagination, marks incoming messages read), `frontend/
+  src/components/ChatBubble.jsx` (new — sent/received bubble variants,
+  timestamp, single/double-checkmark read-receipt indicator, per
+  `docs/DESIGN_SYSTEM.md`'s component list), `frontend/src/socket.js` (new
+  — a lazily-created, reused Socket.IO client singleton, authenticated with
+  the stored JWT read fresh on every (re)connect), `frontend/src/api.js`
+  (added `getMessages`/`sendMessage`/`markMessagesRead`), `frontend/src/
+  App.jsx` (swapped the `ChatComingSoon` import/route for `Chat`),
+  `frontend/src/components/MatchModal.jsx` ("Start a conversation" now
+  navigates straight to `/chat/:matchId` when the new match's id is known,
+  falling back to `/matches` otherwise), `frontend/src/pages/Discovery.jsx`
+  (carries the newly-created match's id into `MatchModal` so the CTA above
+  has something to route to), `frontend/src/pages/Matches.jsx` (comment
+  update only — its link already pointed at `/chat/:matchId`), `frontend/
+  src/pages/Dashboard.jsx` (removed the now-stale "chat coming soon" line),
+  `frontend/package.json` (added `socket.io-client`); `frontend/src/pages/
+  ChatComingSoon.jsx` deleted.
+- **Doc updates:** `docs/DATABASE_SCHEMA.md` (`conversations` section
+  rewritten to explain the Match-as-conversation simplification; `messages`
+  moved to `[IMPLEMENTED]` with the full field list, index list, and
+  divergence notes — `recipient` added, `status` replaced with nullable
+  `readAt`, `attachmentUrl` not implemented); `docs/API_DOCUMENTATION.md`
+  (Messaging section rewritten from `[PLANNED]` to `[IMPLEMENTED]` — full
+  REST contract for all three routes plus the complete Socket.IO event
+  list with payload shapes and the "REST is the single write path" design
+  note); `docs/ROADMAP.md` (Phase 5 marked Complete; also brought Phases
+  0-4's stale "Not Started" status markers up to date while touching this
+  file, since they'd drifted from `PROJECT_STATE.md`'s actual completed-
+  features list over the last few sessions); `MOCK_FEATURES.md` (two new
+  entries: chat is text-only for this pass — not a mock, image/voice
+  attachments were never in scope and are deferred to V2; matches list has
+  no last-message preview/unread badge yet — a scope gap, not a mock);
+  `TODO.md` (checked off all four Chat items with notes on what shipped).
+- **Tests performed:**
+  - Backend: `node -e "require(...)"` smoke-loaded every model/route/
+    `socket.js` file (no syntax/import errors). Started the server and
+    confirmed it boots cleanly with Socket.IO mounted alongside Express, no
+    regressions to the existing non-fatal "MongoDB connection error,
+    continuing without a database connection" pattern. Curled the three new
+    REST routes: no Authorization header -> `401` on all three; bad token
+    -> `401` with the correct message; invalid-format `matchId` -> `400`;
+    a well-formed but DB-unreachable `matchId` -> `500` after the same
+    known Mongoose-buffering-timeout pattern prior phases already hit (not
+    a new bug, see Known Technical Debt). Verified the pure/schema-level
+    logic with a standalone Node script
+    (`_tmp_verify_chat_logic.js`, run against the real model/util files, no
+    `mongoose.connect()` call) — 29/29 checks passed, covering
+    `isParticipant`/`otherParticipant` (including the fixed edge case where
+    a non-participant used to get back an arbitrary other id instead of
+    `null` — caught and fixed by this same test script during this
+    session), the full 200/403/403-unmatched/404 authorization matrix,
+    `roomName()` stability/namespacing, `verifyToken()` accept/reject-wrong-
+    secret/reject-expired, and full `Message` schema validation (required
+    fields, empty/whitespace text, trimming, exact max-length boundary).
+    Additionally — beyond the "pure logic only" pattern prior phases used —
+    ran a **live Socket.IO smoke test** with a real `socket.io-client`
+    against the running server: no-token and bad-token connections both
+    correctly reject with `connect_error`; a validly-signed token connects
+    successfully; `match:join` with an invalid-format `matchId` is rejected
+    via its ack callback; `match:join` for a well-formed but DB-unreachable
+    `matchId` fails gracefully through its ack (`{ ok: false }`) rather than
+    crashing the server (confirmed via the server's own log output, which
+    showed the caught Mongoose buffering-timeout error, not an uncaught
+    exception). All temporary verification scripts and the temporarily
+    `--no-save`-installed `socket.io-client` dev dependency used only for
+    this live socket test were removed from `backend/` afterward; confirmed
+    via `git diff`/`git status` that `backend/package.json`/
+    `package-lock.json` only carry the intended `socket.io` addition.
+  - Frontend: `npm install` pulled in `socket.io-client` (saved to
+    `package.json`), `npm run build` succeeded, `npm run lint` (oxlint)
+    passed with only the same pre-existing, unrelated `AuthContext.jsx`
+    warning carried forward from every prior phase. Also ran `npm run dev`
+    and confirmed the Vite dev server boots cleanly and serves `200` for
+    the app shell, confirming no import-time errors in the new
+    `Chat.jsx`/`ChatBubble.jsx`/`socket.js` files.
+- **Known limitation carried forward:** end-to-end DB-backed testing (two
+  real matched users, actual message persistence + pagination against real
+  seeded data, an actual two-client Socket.IO room broadcast where both
+  sockets are backed by real authorized matches) was not possible in this
+  sandbox for the same reason prior phases couldn't verify it either — no
+  reachable MongoDB. What *was* newly verifiable in this session beyond
+  prior phases' pattern is the full Socket.IO JWT-handshake auth path and
+  graceful-failure behavior against the running server, via a live
+  `socket.io-client`, since that layer doesn't require a DB connection to
+  exercise up to the point where a DB read/write would actually happen.
+- **Next task:** Task #6 — Notifications, per `docs/ROADMAP.md`'s canonical
+  phase numbering (Notification schema/API, match/like/message notification
+  events — this can reuse this session's Socket.IO infrastructure directly
+  for real-time delivery instead of building a second real-time channel —
+  and a basic in-app notification center UI).
+
+---
+
 ## 2026-08-17 — Discovery + Matching (Task #4) implemented
 
 - **Phase:** Phase 3 — Discovery + Matching

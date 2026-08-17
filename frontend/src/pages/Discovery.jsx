@@ -118,7 +118,10 @@ function Discovery() {
       const data = await api.swipe(current.userId, action);
       setQueue((prev) => prev.slice(1));
       if (data.matchCreated) {
-        setMatchInfo(current);
+        // Carry the new match's id along so MatchModal's "Start a
+        // conversation" CTA (Task #5) can route straight into the real
+        // chat screen instead of just the matches list.
+        setMatchInfo({ ...current, matchId: data.match?.id });
       }
     } catch (err) {
       // A 409 "already swiped" shouldn't normally happen from this UI (the

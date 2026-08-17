@@ -21,4 +21,28 @@ function isMutualLike(reciprocalLike) {
   return !!reciprocalLike && reciprocalLike.action === 'like';
 }
 
-module.exports = { canonicalPair, isMutualLike };
+// Whether `userId` is one of the two participants of `match` (a loaded
+// Match document, or any plain object exposing a `users` array of the same
+// shape). Pure/DB-independent — added for Task #5 (Chat) so the
+// GET/POST/PATCH message routes and the Socket.IO room-join handler can
+// share the exact same authorization check instead of each re-deriving it.
+function isParticipant(match, userId) {
+  if (!match || !Array.isArray(match.users)) return false;
+  return match.users.some((u) => String(u) === String(userId));
+}
+
+// The other participant's id (as a string) for a two-person match, or null
+// if `userId` isn't a participant at all. Used to derive Message.recipient
+// without a second DB lookup. Deliberately checks membership first (not
+// just "the first id that isn't userId") so a non-participant never gets
+// back an arbitrary participant's id — callers in this codebase always
+// call this after an isParticipant() check anyway (see
+// backend/routes/matches.js's loadAuthorizedMatch()), but the function's
+// own contract should hold even if called in isolation.
+function otherParticipant(match, userId) {
+  if (!isParticipant(match, userId)) return null;
+  const other = match.users.find((u) => String(u) !== String(userId));
+  return other ? String(other) : null;
+}
+
+module.exports = { canonicalPair, isMutualLike, isParticipant, otherParticipant };

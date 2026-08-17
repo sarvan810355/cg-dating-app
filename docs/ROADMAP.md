@@ -6,12 +6,12 @@ as of 2026-08-17 and should be updated as phases progress.
 
 | Phase | Name | Scope tier | Status | Summary |
 |---|---|---|---|---|
-| 0 | Foundation | — | **In Progress** | Repo setup, backend/frontend scaffold, baseline docs (this doc set). |
-| 1 | Authentication + User System | MVP | **In Progress** | Signup, login, JWT sessions, protected routes, mobile OTP verification, password reset. |
-| 2 | Profile System | MVP | Not Started | Profile schema, multi-step profile builder, photo upload (Cloudinary), bio/interests/prompts, preferences, profile strength score. |
-| 3 | Location & Discovery | MVP | Not Started | City/district capture across all CG districts/towns, geospatial indexing, discovery feed with pagination and basic filters. |
-| 4 | Matching (Like/Pass/Match) | MVP | Not Started | Like/pass API, mutual-match detection, match creation, match animation screen. |
-| 5 | Real-Time Chat | MVP | Not Started | Socket.IO setup, conversations/messages schema, real-time text chat UI. |
+| 0 | Foundation | — | **Complete** | Repo setup, backend/frontend scaffold, baseline docs (this doc set). |
+| 1 | Authentication + User System | MVP | **Complete (MVP subset)** | Signup, login, JWT sessions, protected routes implemented; mobile OTP verification and password reset are still `[PLANNED]` (folded into Phase 7 — Verification). |
+| 2 | Profile System | MVP | **Complete (MVP subset)** | Profile schema, multi-step profile builder, bio/interests/prompts, profile strength score implemented; photo upload is MOCK/TEMPORARY (no Cloudinary yet, see `MOCK_FEATURES.md`); a persisted `preferences` collection is still deferred (see `docs/DATABASE_SCHEMA.md`). |
+| 3 | Location & Discovery | MVP | **Complete (MVP subset)** | City/district capture and discovery feed with pagination + basic filters implemented; geospatial "near me" filtering not yet populated (see `MOCK_FEATURES.md`). |
+| 4 | Matching (Like/Pass/Match) | MVP | **Complete (MVP subset)** | Like/pass API, mutual-match detection, match creation, match modal implemented; unmatch and "who liked you" not yet built. |
+| 5 | Real-Time Chat | MVP | **Complete** | Socket.IO setup (JWT-authed handshake), Message schema (Match doubles as the conversation — see `docs/DATABASE_SCHEMA.md`), real-time text chat UI, basic read receipts + typing indicator. Text-only for this pass (image/voice deferred to V2, see `MOCK_FEATURES.md`). |
 | 6 | Notifications | MVP | Not Started | Notification schema/API, match/like/message events, in-app notification center. |
 | 7 | Verification | MVP | Not Started | Mobile OTP + selfie/photo verification, verification badges. |
 | 8 | Safety (Report/Block/Safety Center) | MVP | Not Started | Report and block flows, Safety Center screen. |

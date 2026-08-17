@@ -1,5 +1,6 @@
 require('dotenv').config();
 
+const http = require('http');
 const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
@@ -9,6 +10,7 @@ const authRouter = require('./routes/auth');
 const profileRouter = require('./routes/profile');
 const discoveryRouter = require('./routes/discovery');
 const matchesRouter = require('./routes/matches');
+const { initSocket } = require('./socket');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -40,7 +42,17 @@ mongoose
     console.warn('Continuing without a database connection.');
   });
 
-app.listen(PORT, () => {
+// Socket.IO (Task #5 — Chat) shares the same underlying HTTP server as
+// Express rather than listening on a separate port — see backend/socket.js
+// for JWT handshake auth + event handlers. The io instance is attached to
+// the Express app so route handlers can reach it via req.app.get('io')
+// (see backend/routes/matches.js's message routes, which persist via REST
+// then broadcast via this same io instance).
+const server = http.createServer(app);
+const io = initSocket(server);
+app.set('io', io);
+
+server.listen(PORT, () => {
   console.log(`CG Dating backend listening on port ${PORT}`);
 });
 

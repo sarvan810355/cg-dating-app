@@ -264,19 +264,113 @@ note below. Routes in `backend/routes/matches.js`.
   `docs/BUSINESS_PLAN.md`) and unmatch can follow once basic matching is proven
   end-to-end against a real database.
 
-## 5. Messaging — `[PLANNED]`
+## 5. Messaging — `[IMPLEMENTED]`
 
-Base path: `/api/conversations`, plus Socket.IO events.
+Base path: `/api/matches/:matchId/messages` (routes live in `backend/routes/
+matches.js`, alongside match listing), plus Socket.IO events (`backend/
+socket.js`). All routes require auth and require the caller to be one of the
+two users in that match — `403` otherwise, `403` again if the match has been
+unmatched, `404` if `matchId` doesn't resolve to any match. Every text
+message must go through `POST` below — nothing is ever written directly by
+a socket event; see the "REST is the single write path" note under Socket.IO
+events below.
 
-- `GET /api/conversations` — auth required — list the caller's conversations, most
-  recent first.
-- `GET /api/conversations/:id/messages?before=&limit=` — auth required, must be a
-  participant — paginated message history.
-- `POST /api/conversations/:id/messages` — auth required, must be a participant — send
-  a message (also emitted in real time via Socket.IO).
-- **Socket.IO events (planned):** `message:send`, `message:new`, `message:read`,
-  `typing:start`, `typing:stop`, `match:new`, `notification:new`. Socket auth uses the
-  same JWT, passed at handshake.
+**Divergence from the original draft:** no `/api/conversations` base path —
+a `Match` already uniquely identifies a two-person conversation, so
+messaging is nested under `/api/matches/:matchId` instead of a separate
+Conversation resource; see the `conversations` divergence note in
+`docs/DATABASE_SCHEMA.md`.
+
+### `GET /api/matches/:matchId/messages`
+- **Query params (optional):** `limit` (default `30`, capped at `50`),
+  `before` (a message id — fetches the page of messages strictly older than
+  that message).
+- **Pagination direction:** newest-first, cursor-paginated. Chosen over
+  offset pagination because it's the natural fit for "show the latest
+  messages, then load older ones as the user scrolls up" (infinite scroll),
+  and stays correct even as new messages keep arriving while the user
+  scrolls back through history (unlike a page-number offset, which would
+  shift under concurrent inserts). The response's `messages` array is
+  ordered newest-first; the frontend reverses it for oldest-at-top display
+  (see `frontend/src/pages/Chat.jsx`).
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "messages": [
+      { "id", "matchId", "senderId", "recipientId", "text", "createdAt", "readAt" }
+    ],
+    "hasMore": true
+  }
+  ```
+- **Errors:** `400` — invalid `matchId`/`before`; `403` — caller isn't a
+  participant, or the match has been unmatched; `404` — no such match;
+  `401`; `500`.
+
+### `POST /api/matches/:matchId/messages`
+- **Request body:** `{ "text": "..." }`
+- **Validation:** `text` required (non-empty after trimming), max 2000
+  characters. The recipient is always derived server-side from the match's
+  two participants — never taken from the client — which also means you can
+  never message yourself (a match's two users are, by construction,
+  distinct).
+- Persists the message, then broadcasts it to the match's Socket.IO room as
+  `message:new` (see below) — REST persistence and real-time delivery are
+  one call, not two separate write paths.
+- **Success response:** `201 Created` —
+  `{ "message": { "id", "matchId", "senderId", "recipientId", "text", "createdAt", "readAt": null } }`
+- **Errors:** `400` — missing/empty/over-length `text`, or invalid
+  `matchId`; `403` — not a participant, or unmatched; `404` — no such match;
+  `401`; `500`.
+
+### `PATCH /api/matches/:matchId/messages/read`
+- Marks every message addressed *to* the caller in this match as read
+  (`readAt` set to now). Idempotent — re-calling with nothing unread simply
+  reports `readCount: 0`.
+- Broadcasts `message:read` to the match's Socket.IO room (see below) so the
+  sender's UI can flip its read-receipt checkmarks live. The write itself
+  still only ever happens via this REST call, never from a socket event —
+  same single-write-path principle as sending.
+- **Success response:** `200 OK` — `{ "matchId", "readCount", "readAt" }`
+- **Errors:** `403` — not a participant, or unmatched; `404` — no such
+  match; `401`; `500`.
+
+### Socket.IO events — `[IMPLEMENTED]`
+Same Express HTTP server, mounted via `backend/socket.js`'s `initSocket()`.
+**Auth:** the client passes the JWT at handshake as
+`{ auth: { token: "<JWT>" } }` (a `Bearer` `Authorization` header is
+accepted as a fallback for non-browser clients). The server verifies it with
+the exact same `verifyToken()` the REST `requireAuth` middleware uses
+(`backend/middleware/auth.js`) — one place owns JWT secret-handling for both
+transports. A missing/invalid/expired token rejects the connection with a
+`connect_error` before any event handler runs.
+
+**Design note — REST is the single write path.** Every event below either
+reads/authorizes (`match:join`), is purely ephemeral and never persisted
+(`typing:start`/`typing:stop`), or is a server->client broadcast that
+*follows* a REST write (`message:new` after `POST`, `message:read` after
+`PATCH`). There is no `message:send` socket event — sending only ever goes
+through the REST `POST` above, so there is exactly one code path that can
+ever create a `Message` document.
+
+- **`match:join`** (client → server) — `{ matchId }`, with an ack callback
+  `(ack) => ...`. Server verifies the connected user is a participant of an
+  active (not-unmatched) match with that id (via the same `isParticipant()`
+  helper the REST routes use) and, if so, joins the socket to that match's
+  room (`match:<matchId>`); acks `{ ok: true }` on success or
+  `{ ok: false, message }` otherwise. Must be called before any `message:new`
+  broadcasts for that match will reach this socket.
+- **`match:leave`** (client → server) — `{ matchId }`. Leaves the room; no ack.
+- **`message:new`** (server → room) — emitted after a successful
+  `POST /api/matches/:matchId/messages`, to every socket joined to that
+  match's room (including the sender's own, if joined) — payload is the same
+  shape as the REST response's `message` object.
+- **`typing:start`** / **`typing:stop`** (client → server) — `{ matchId }`.
+  Ephemeral, never persisted. Server re-broadcasts to the room (excluding
+  the sender) as **`typing`** (server → room) —
+  `{ matchId, userId, isTyping: true | false }`.
+- **`message:read`** (server → room) — emitted after a successful
+  `PATCH .../messages/read` that actually changed at least one message —
+  `{ matchId, readBy, readAt }`.
 
 ## 6. Verification — `[PLANNED]`
 

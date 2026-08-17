@@ -104,3 +104,31 @@ export function swipe(toUserId, action) {
 export function getMatches({ page, limit } = {}) {
   return request(`/api/matches${toQueryString({ page, limit })}`, { method: 'GET', auth: true });
 }
+
+// --- Chat (Task #5) --------------------------------------------------------
+// REST is the history/send/read-receipt path; real-time delivery is handled
+// separately by the Socket.IO client (see frontend/src/socket.js).
+
+// Newest-first, cursor-paginated (`before` = a message id) — see
+// docs/API_DOCUMENTATION.md's Messaging section for why.
+export function getMessages(matchId, { before, limit } = {}) {
+  return request(`/api/matches/${matchId}/messages${toQueryString({ before, limit })}`, {
+    method: 'GET',
+    auth: true,
+  });
+}
+
+export function sendMessage(matchId, text) {
+  return request(`/api/matches/${matchId}/messages`, {
+    method: 'POST',
+    body: { text },
+    auth: true,
+  });
+}
+
+export function markMessagesRead(matchId) {
+  return request(`/api/matches/${matchId}/messages/read`, {
+    method: 'PATCH',
+    auth: true,
+  });
+}

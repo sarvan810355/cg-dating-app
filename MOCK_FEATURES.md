@@ -39,6 +39,24 @@ move items to "Resolved" rather than deleting them, so there's a record of what 
       file, and entitlement checks must still happen server-side even in mock mode.
 - [ ] **Anthropic Claude API (AI features) — no credentials configured.** AI Icebreakers,
       Why-You-Match, Profile Coach, Date Ideas are all V2 scope and not started.
+- [ ] **Chat is text-only for this pass — not a mock, a documented scope reduction.**
+      Task #5's real-time messaging (`backend/routes/matches.js`'s message routes,
+      `backend/socket.js`, `frontend/src/pages/Chat.jsx`) is a real, non-mocked
+      implementation end-to-end (REST persistence + Socket.IO live delivery, JWT-authed
+      socket handshake, room-scoped typing indicators and read receipts). Image/voice
+      messages (`messages.attachmentUrl` in the original draft schema) were never in
+      scope for this task and are deferred to V2 alongside voice/video calling (see
+      `TODO.md`'s V2 section) — no attachment field exists on the `Message` model at
+      all yet, so there's nothing mocked here to later replace, just a feature not yet
+      built.
+- [ ] **Matches list has no last-message preview / unread badge yet — not a mock, a
+      scope gap.** `GET /api/matches` (`backend/routes/matches.js`) doesn't return
+      per-match last-message text or an unread count, so `frontend/src/pages/
+      Matches.jsx` can't show either yet — see the divergence note in
+      `docs/DATABASE_SCHEMA.md`'s `conversations` section for how this could be added
+      (a per-match latest-message lookup or a denormalized field maintained on `Match`
+      when a message is sent). Chat itself is fully functional without this; deferred
+      here to keep this task focused on messaging working end-to-end.
 
 ## Resolved (mocks replaced with real implementations)
 

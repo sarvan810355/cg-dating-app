@@ -30,7 +30,10 @@ function MatchModal({ otherUser, onClose }) {
             className="w-full"
             onClick={() => {
               onClose();
-              navigate('/matches');
+              // Task #5: go straight into the real chat screen for this
+              // match when we know its id; fall back to the matches list
+              // for any caller that doesn't have it yet.
+              navigate(otherUser.matchId ? `/chat/${otherUser.matchId}` : '/matches');
             }}
           >
             Start a conversation

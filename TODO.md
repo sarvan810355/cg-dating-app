@@ -55,10 +55,18 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
       not yet implemented
 
 ### Chat
-- [ ] Socket.IO server setup
-- [ ] Conversation + Message schemas
-- [ ] Real-time text chat UI
-- [ ] Message read receipts / delivery status (basic)
+- [x] Socket.IO server setup (JWT-authed handshake sharing `middleware/auth.js`'s
+      `verifyToken()`, mounted on the same HTTP server as Express — see `backend/socket.js`)
+- [x] Message schema (`backend/models/Message.js`) — no separate `Conversation`
+      schema; `Match` doubles as the conversation, see the divergence note in
+      `docs/DATABASE_SCHEMA.md`
+- [x] Real-time text chat UI (`frontend/src/pages/Chat.jsx`, `frontend/src/
+      components/ChatBubble.jsx` — bubbles, auto-scroll, typing indicator, "load
+      older messages", replaces the old `ChatComingSoon.jsx` placeholder)
+- [x] Message read receipts (basic) — `PATCH /api/matches/:matchId/messages/read` +
+      `message:read` socket broadcast + a simple single/double-checkmark indicator;
+      no separate "delivered" status tracked (see `docs/DATABASE_SCHEMA.md`'s
+      `messages` divergence note)
 
 ### Notifications
 - [ ] Notification schema + API
