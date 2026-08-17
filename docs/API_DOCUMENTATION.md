@@ -48,13 +48,20 @@ Base path: `/api/auth`
   ```
 - **Success response:** `200 OK`
   ```json
-  { "token": "<JWT>", "user": { "id": "...", "email": "...", "createdAt": "..." } }
+  { "token": "<JWT>", "user": { "id": "...", "email": "...", "role": "USER", "createdAt": "..." } }
   ```
 - **Errors:**
   - `400` — missing email/password
   - `401` — invalid email or password (same message for both cases, to avoid user enumeration)
+  - `403` — `[IMPLEMENTED, Task #11]` correct credentials, but the account's
+    `accountStatus` is `SUSPENDED` (see this doc's Admin section,
+    `PATCH /api/admin/users/:userId/suspend`) — `{ "message": "Your account has been
+    suspended. Contact support if you believe this is a mistake." }`. Checked **after**
+    the password match (not before), so a wrong-password attempt against a suspended
+    account still gets the generic `401` above — a suspended account's status is never
+    leaked to someone who doesn't actually know the password.
   - `500` — unexpected server error
-- **Notes:** updates `user.lastLoginAt` on success.
+- **Notes:** updates `user.lastLoginAt` on success (not on a `403` suspension block).
 
 ### `GET /api/auth/me`
 - **Auth:** required — `Authorization: Bearer <JWT>` header, verified by the
@@ -62,8 +69,12 @@ Base path: `/api/auth`
 - **Request body:** none
 - **Success response:** `200 OK`
   ```json
-  { "user": { "id": "...", "email": "...", "createdAt": "..." } }
+  { "user": { "id": "...", "email": "...", "role": "USER", "createdAt": "..." } }
   ```
+  `role` — `[IMPLEMENTED, Task #11]` — added so the frontend's role-gated `/admin`
+  section (`frontend/src/components/AdminRoute.jsx`) can decide whether to show/allow it
+  at all using the same call `frontend/src/context/AuthContext.jsx` already makes on
+  every page load, with no second "am I an admin" request needed.
 - **Errors:**
   - `401` — missing/invalid/expired token (from `requireAuth` middleware)
   - `404` — user no longer exists
@@ -191,9 +202,14 @@ Base path: `/api/discovery`. All routes require auth. Routes in
   `docs/DATABASE_SCHEMA.md`.
 - Excludes: the caller, anyone the caller has already swiped on (like or pass —
   either decision means "don't show again"), anyone the caller is already
-  matched with, and — `[IMPLEMENTED]`, Task #10, see this doc's Safety section
+  matched with, — `[IMPLEMENTED]`, Task #10, see this doc's Safety section
   below — anyone involved in a block with the caller in **either** direction
-  (someone the caller has blocked, or someone who has blocked the caller).
+  (someone the caller has blocked, or someone who has blocked the caller), and
+  — `[IMPLEMENTED]`, Task #11, see this doc's Admin section — anyone with
+  `accountStatus: 'SUSPENDED'`, in both directions (mostly defense-in-depth,
+  since a suspended user is also blocked at login — see
+  `POST /api/auth/login` above — so this mainly matters for a still-valid,
+  not-yet-expired token from before the suspension took effect).
   Profiles missing `displayName`/`dateOfBirth`/`gender` (i.e. not complete
   enough to be worth showing) are also excluded.
 - **Success response:** `200 OK` —
@@ -221,10 +237,21 @@ Base path: `/api/discovery`. All routes require auth. Routes in
     original decision is preserved, never silently overwritten.
   - A concurrent duplicate request (race) is caught by the same `(fromUser,
     toUser)` unique index and also returns `409` with the winning swipe's state.
+- **Free-tier daily like limit (Task #12 — Subscription scaffolding):** a
+  *new* `"like"` swipe (not `"pass"`, and not an idempotent repeat of an
+  already-recorded swipe — see above) is checked against the caller's
+  free-tier daily like quota **before** being recorded — see §9's
+  "Server-side entitlement enforcement" for the full explanation and the
+  exact limit. Over the limit → `429 Too Many Requests`,
+  `{ "message": "...", "upgradeRequired": true, "dailyLikeLimit": 20 }` — the
+  swipe is **not** persisted, so the caller can retry once their quota
+  resets (or after upgrading) without having "used up" the attempt. Bypassed
+  entirely for a caller with the `unlimited_likes` plan feature.
 - **Success response:** `201 Created` —
   `{ "like": { "id", "fromUserId", "toUserId", "action", "createdAt" }, "matchCreated": true|false, "match": { "id", "users", "matchedAt" } | null }`
 - **Errors:** `400` — invalid `toUserId`/`action`, or swiping on yourself; `404` —
-  caller or target has no profile; `409` — see above; `401`; `500`.
+  caller or target has no profile; `409` — see above; `429` — daily like limit
+  reached, see above; `401`; `500`.
 
 ## 4. Matching — `[IMPLEMENTED, list only — unmatch not yet built]`
 
@@ -740,16 +767,98 @@ for chat.
   notification bell's badge count live (see
   `frontend/src/context/NotificationContext.jsx`) without polling.
 
-## 9. Payments / Subscription — `[PLANNED]`
+## 9. Payments / Subscription — `[IMPLEMENTED, with a prominent MOCK-checkout caveat below]`
 
-Base path: `/api/subscriptions`, `/api/payments`
+Task #12 in the internal TaskList — Subscription scaffolding. Implemented in
+`backend/models/Plan.js`/`Subscription.js`, `backend/routes/subscription.js`,
+`backend/utils/entitlementUtils.js`.
 
-- `GET /api/subscriptions/plans` — public — list active plans and admin-configured pricing.
-- `POST /api/subscriptions/checkout` — auth required — creates a Razorpay order for a
-  chosen plan (may be MOCK/TEMPORARY initially, clearly labeled — see `MOCK_FEATURES.md`).
-- `POST /api/payments/webhook` — Razorpay webhook (verified via signature, not user auth)
-  — the only path allowed to grant/update subscription entitlement.
-- `GET /api/subscriptions/me` — auth required — caller's current plan/entitlement.
+**Base path divergence from the original `[PLANNED]` draft:** the plural
+`/api/subscriptions` + `/api/payments` base paths were never built. Instead:
+`GET /api/plans` (singular, no `/subscriptions` prefix — this is the public
+paywall listing, not a subscription-scoped resource) and
+`/api/subscription/*` (singular) for the caller's own subscription actions.
+Both are served by the same router, `backend/routes/subscription.js`,
+mounted at the bare `/api` root in `backend/server.js`. There is no
+`/api/payments/webhook` at all — see the MOCK CHECKOUT warning below.
+
+- `GET /api/plans` — **public, no auth** — list active plans
+  (`{ plans: [{ id, code, name, priceInPaise, billingPeriod, features,
+  isActive }] }`), cheapest first. This is what a paywall screen shows
+  before the user commits to anything. Plan pricing/features are
+  admin-editable in the database (see `docs/DATABASE_SCHEMA.md`'s `plans`
+  section) — never hardcoded in route/frontend code, per
+  `docs/BUSINESS_PLAN.md`.
+- `GET /api/subscription/me` — auth required — the caller's current
+  effective subscription: `{ subscription: {...} | null }`. `null` means
+  free tier. Always re-derived from the database on every call (never
+  cached on the JWT) — see `backend/utils/entitlementUtils.js#getEffectiveSubscription()`.
+  An `ACTIVE` subscription and a `CANCELLED`-but-not-yet-`expiresAt`
+  subscription are both returned here (not just `ACTIVE`) — cancelling
+  doesn't erase the row until it actually expires.
+- `POST /api/subscription/subscribe` — auth required — body
+  `{ "planCode": "CG_PLUS" | "CG_PRO" | "CG_ELITE" }`. Creates a new
+  `ACTIVE` `Subscription` with `expiresAt = now + billingPeriod`. Returns
+  `201 { message, subscription }`.
+
+  > ## ⚠️ MOCK / TEMPORARY — NOT REAL PAYMENT PROCESSING
+  > There is **no real Razorpay integration** behind this endpoint — no
+  > credentials are configured for this project at all (see
+  > `MOCK_FEATURES.md`). Calling this endpoint while authenticated
+  > **immediately activates the plan for free** — there is no Razorpay
+  > order created, no checkout redirect, no payment actually collected, and
+  > no webhook verification of any kind. A real integration would instead:
+  > (1) create a Razorpay order for the plan's price and return it to the
+  > client to open Razorpay Checkout, (2) the user completes payment,
+  > (3) Razorpay calls a **signature-verified webhook**
+  > (`POST /api/payments/webhook`, not built in this pass), and only then
+  > would a subscription be marked `ACTIVE`. `paymentProvider`
+  > (`'mock_razorpay'`) and `paymentReference` (a fake generated string) are
+  > still recorded on the created `Subscription` document so mock-path rows
+  > stay traceable in the database. **This must not ship to production
+  > as-is.**
+- `POST /api/subscription/cancel` — auth required, no body — sets the
+  caller's current `ACTIVE` subscription to `CANCELLED`. Standard SaaS
+  behavior: stops future renewal, does **not** immediately revoke access —
+  the subscription (and `hasFeature()`, see below) both stay valid until
+  its already-active `expiresAt`. Idempotent: cancelling an
+  already-cancelled-but-still-valid subscription returns its current state
+  (`200`) rather than erroring; `404` only if there's nothing to cancel at
+  all (genuinely free-tier, or already fully expired).
+
+### Server-side entitlement enforcement
+
+`backend/utils/entitlementUtils.js#hasFeature(userId, featureName)` is the
+**only** sanctioned way anywhere in this codebase to check whether a user
+has a premium feature — it always re-queries the database for the caller's
+current effective `Subscription` -> `Plan.features`. **No code path ever
+trusts a client-submitted "isPremium" flag, a JWT claim, or a request body
+field for entitlement** — see `docs/BUSINESS_PLAN.md`'s "entitlement is
+always validated server-side" requirement.
+
+As a concrete demonstration (no other "premium feature" has a gated code
+path yet in this codebase), `hasFeature()` is applied to the discovery
+feed's daily **like** limit:
+
+- `POST /api/discovery/swipe` (see the Discovery section above) now enforces a **free-tier limit of
+  20 likes per UTC calendar day** (passes are free/unlimited) — the exact
+  number is documented in `docs/BUSINESS_PLAN.md`. A caller with the
+  `unlimited_likes` feature (currently only `CG_PLUS`/`CG_PRO`/`CG_ELITE`,
+  see `docs/DATABASE_SCHEMA.md`'s `plans` seed data) bypasses the limit
+  entirely. Hitting the limit on a *new* like (idempotent repeats of an
+  already-recorded swipe are unaffected, and the swipe is never persisted
+  when blocked) returns:
+  ```json
+  // 429 Too Many Requests
+  {
+    "message": "You've reached today's free like limit (20/day). Upgrade to CG_PLUS for unlimited likes.",
+    "upgradeRequired": true,
+    "dailyLikeLimit": 20
+  }
+  ```
+  The frontend (`frontend/src/pages/Discovery.jsx`) checks for
+  `upgradeRequired: true` on a `429` and shows a friendly "upgrade to
+  CG_PLUS" prompt linking to `/subscription`, instead of a raw error.
 
 ## 10. Events — `[PLANNED]` (V3 — CG Connect)
 
@@ -759,18 +868,216 @@ Base path: `/api/events`
 - `POST /api/events` — admin/organizer role required — create an event.
 - `POST /api/events/:id/rsvp` — auth required.
 
-## 11. Admin — `[PLANNED]`
+## 11. Admin — `[IMPLEMENTED, basic]`
 
-Base path: `/api/admin` — every route requires auth **and** an appropriate role
-(`SUPER_ADMIN`, `ADMIN`, `MODERATOR`, `SUPPORT`, or `ANALYST` depending on the action).
+Base path: `/api/admin` (routes in `backend/routes/admin.js`; role middleware in
+`backend/middleware/adminAuth.js`; audit-log helper in
+`backend/utils/auditUtils.js`; models: `backend/models/AuditLog.js`, plus the
+`role`/`accountStatus` fields on `backend/models/User.js`). Every route requires auth
+(`requireAuth`) **and** an appropriate role (`requireRole(...)`, checked fresh from the
+database on every request — a role change or suspension takes effect on the caller's
+very next request, not only after their token expires).
 
-- `GET /api/admin/reports?status=` — role: `MODERATOR`+ — reports queue.
-- `PUT /api/admin/reports/:id` — role: `MODERATOR`+ — resolve/dismiss a report.
-- `GET /api/admin/verifications?status=` — role: `MODERATOR`+ — verification review queue.
-- `PUT /api/admin/verifications/:id` — role: `MODERATOR`+ — approve/reject.
-- `POST /api/admin/users/:id/suspend` / `.../ban` / `.../unban` — role: `ADMIN`+.
-- `GET /api/admin/audit-logs` — role: `SUPER_ADMIN` (or `ANALYST` read-only, TBD).
-- Every admin mutation writes a `moderation_actions` and/or `audit_logs` entry.
+**Divergence from the original draft:** the role enum is `USER`/`SUPER_ADMIN`/`ADMIN`/
+`MODERATOR` only (no `SUPPORT`/`ANALYST` — see `docs/DATABASE_SCHEMA.md`'s divergence
+note); there is no `GET /api/admin/audit-logs` route yet (audit entries are written on
+every mutation below, but nothing reads them back via the API in this pass — a future
+"recent admin activity" view can add one without a schema change, since
+`backend/models/AuditLog.js` already has a `createdAt` index for exactly that access
+pattern); `PUT /api/admin/verifications/:id` (by report/verification id) became
+`PATCH /api/admin/verifications/photo/:userId` (by target user id, and `PATCH` — a
+partial state transition, not a full resource replacement, matching this codebase's
+existing `PATCH .../messages/read` /
+`PATCH /api/notifications/:id/read` convention); `POST /api/admin/users/:id/suspend` /
+`.../ban` / `.../unban` became `PATCH /api/admin/users/:userId/suspend` /
+`.../reinstate` only — no ban/unban in this basic pass (see `accountStatus`'s 2-value
+enum divergence in `docs/DATABASE_SCHEMA.md`); a role-change route
+(`PATCH /api/admin/users/:userId/role`, `SUPER_ADMIN`-only) and a basic user
+search/list route (`GET /api/admin/users`) were added beyond the original draft — both
+needed to make suspend/reinstate/role-change usable without already knowing a target
+`userId`.
+
+### `GET /api/admin/dashboard`
+- **Role:** `MODERATOR`+ (`MODERATOR`, `ADMIN`, or `SUPER_ADMIN`).
+- Simple aggregate counts for the admin dashboard's stat grid — plain `countDocuments()`
+  calls, **not** a full analytics engine (that's the separate, still-`[PLANNED]` Task
+  #13/Section 12 below).
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "counts": {
+      "totalUsers": 128,
+      "mobileVerifiedUsers": 40,
+      "photoVerifiedUsers": 22,
+      "totalMatches": 57,
+      "totalMessages": 610,
+      "pendingReports": 3,
+      "pendingPhotoVerifications": 5
+    }
+  }
+  ```
+  `mobileVerifiedUsers`/`photoVerifiedUsers` are reported as two separate counts (not one
+  combined "verified users" figure) since a user can be verified on one level, both, or
+  neither independently. `totalMatches` counts only active (`unmatched: false`) matches.
+- **Errors:** `401`; `403` (caller's role isn't `MODERATOR`+); `500`.
+
+### `GET /api/admin/reports?status=PENDING&page=&limit=`
+- **Role:** `MODERATOR`+.
+- The reports moderation queue — paginated (`page` default `1`, `limit` default `20`,
+  capped at `50`), newest first. `status` defaults to `PENDING` (the actual queue view)
+  but accepts any of `PENDING`/`REVIEWED`/`ACTION_TAKEN`/`DISMISSED` so a moderator can
+  also review past decisions.
+- Each report includes basic reporter/reportedUser info (`id`, `email`, `displayName` —
+  batch-fetched, not N+1) alongside the report's own fields, plus `reviewNotes` (private,
+  `select: false` on the schema elsewhere, explicitly re-selected here since this IS the
+  admin-only view that's allowed to see it).
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "reports": [
+      {
+        "id": "...",
+        "reporter": { "id": "...", "email": "...", "displayName": "..." },
+        "reportedUser": { "id": "...", "email": "...", "displayName": "..." },
+        "reason": "harassment",
+        "details": "...",
+        "evidence": [],
+        "status": "PENDING",
+        "reviewNotes": null,
+        "reviewedAt": null,
+        "reviewedBy": null,
+        "createdAt": "..."
+      }
+    ],
+    "page": 1,
+    "hasMore": false
+  }
+  ```
+- **Errors:** `400` — invalid `status`; `401`; `403`; `500`.
+
+### `PATCH /api/admin/reports/:id`
+- **Role:** `MODERATOR`+.
+- **Request body:** `{ "status": "REVIEWED" | "ACTION_TAKEN" | "DISMISSED", "reviewNotes"?: "..." }`
+  (`status` back to `PENDING` is rejected — `PENDING` is only ever a report's starting
+  state, never something set via this route).
+- Sets `reviewedAt`/`reviewedBy` from the acting admin, and — if `reviewNotes` is
+  provided — the private moderation note (capped at the same
+  `REPORT_DETAILS_MAX_LENGTH` as `details`). Writes an `AuditLog` entry
+  (`action: 'report.reviewed'`, `targetUserId`: the reported user, `details: { reportId,
+  status }`).
+- **Success response:** `200 OK` — `{ "report": { ...same shape as the list above } }`.
+- **Errors:** `400` — invalid `id`, invalid `status`, or `reviewNotes` too long; `401`;
+  `403`; `404` — no such report; `500`.
+
+### `GET /api/admin/verifications/photo?status=PENDING&page=&limit=`
+- **Role:** `MODERATOR`+.
+- The photo-verification review queue — same pagination shape as the reports queue
+  above, defaulting to `status=PENDING`. **This IS an admin-only view of
+  `submittedPhotoUrl`** — unlike the public profile view
+  (`GET /api/profile/:userId`), which only ever surfaces the derived `photoVerified`
+  boolean (see Section 6's Verification badges note), this route intentionally returns
+  the raw submitted selfie so a moderator can actually review it.
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "verifications": [
+      {
+        "userId": "...",
+        "email": "...",
+        "displayName": "...",
+        "status": "PENDING",
+        "submittedPhotoUrl": "data:image/jpeg;base64,...",
+        "submittedAt": "..."
+      }
+    ],
+    "page": 1,
+    "hasMore": false
+  }
+  ```
+- **Errors:** `400` — invalid `status`; `401`; `403`; `500`.
+
+### `PATCH /api/admin/verifications/photo/:userId`
+- **Role:** `MODERATOR`+.
+- **Request body:** `{ "status": "VERIFIED" | "REJECTED" }`.
+- The transition Section 6's Verification docs noted nothing in this codebase ever
+  performed before this task — sets `photoVerification.status`, `verifiedAt` (now, on
+  approval; `null` on rejection), `reviewedAt`/`reviewedBy` from the acting admin.
+  Writes an `AuditLog` entry (`action: 'verification.approved'` or
+  `'verification.rejected'`, `targetUserId`: the reviewed user).
+- **Success response:** `200 OK` —
+  `{ "userId": "...", "photoVerification": { "status": "VERIFIED", "verifiedAt": "..." } }`
+- **Errors:** `400` — invalid `userId`, or `status` isn't `VERIFIED`/`REJECTED`; `401`;
+  `403`; `404` — no such user; `500`.
+
+### `GET /api/admin/users?email=&page=&limit=`
+- **Role:** `ADMIN`+ (`ADMIN` or `SUPER_ADMIN` — tighter than the `MODERATOR`+ routes
+  above, since this is part of the account-management surface, same tier as
+  suspend/reinstate below). **Addition beyond the original task spec's route list** —
+  needed so suspend/reinstate/role-change are actually usable from the frontend without
+  already knowing a target `userId`; a simple case-insensitive partial match on `email`
+  (`?email=` omitted returns the full user list, newest-first, paginated).
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "users": [
+      {
+        "id": "...",
+        "email": "...",
+        "displayName": "...",
+        "role": "USER",
+        "accountStatus": "ACTIVE",
+        "mobileVerified": false,
+        "photoVerified": false,
+        "createdAt": "...",
+        "lastLoginAt": "..."
+      }
+    ],
+    "page": 1,
+    "hasMore": false
+  }
+  ```
+- **Errors:** `401`; `403`; `500`.
+
+### `PATCH /api/admin/users/:userId/suspend`
+- **Role:** `ADMIN`+.
+- Sets `accountStatus` to `SUSPENDED`. A suspended user is blocked at their next login
+  attempt (`POST /api/auth/login` — see Section 1 below) and excluded from the
+  discovery feed (Section 3) for everyone; existing matches/messages/reports are
+  untouched (this is an account-access gate, not a data deletion). Self-suspend is
+  rejected (`400`) — an admin cannot suspend their own account through this route.
+  Writes an `AuditLog` entry (`action: 'user.suspended'`).
+- **Success response:** `200 OK` — `{ "userId": "...", "accountStatus": "SUSPENDED" }`
+- **Errors:** `400` — invalid `userId`, or suspending your own account; `401`; `403`;
+  `404` — no such user; `500`.
+
+### `PATCH /api/admin/users/:userId/reinstate`
+- **Role:** `ADMIN`+.
+- Reverses a suspension (`accountStatus` back to `ACTIVE`). Writes an `AuditLog` entry
+  (`action: 'user.reinstated'`).
+- **Success response:** `200 OK` — `{ "userId": "...", "accountStatus": "ACTIVE" }`
+- **Errors:** `400` — invalid `userId`; `401`; `403`; `404` — no such user; `500`.
+
+### `PATCH /api/admin/users/:userId/role`
+- **Role:** `SUPER_ADMIN` only — restricted tighter than every other route in this
+  section. An `ADMIN`/`MODERATOR` caller is `403`'d by the role middleware before this
+  handler ever runs, so **ADMIN/MODERATOR can never escalate anyone's privileges,
+  including their own** — there is no in-handler self-escalation check to bypass,
+  because the role gate itself is the entire enforcement.
+- **Request body:** `{ "role": "USER" | "SUPER_ADMIN" | "ADMIN" | "MODERATOR" }`.
+- Writes an `AuditLog` entry (`action: 'user.role_changed'`, `details: { oldRole,
+  newRole }`). No special-case preventing a `SUPER_ADMIN` from changing their own role —
+  that's a first-admin's own informed decision, not something this basic pass guards
+  against.
+- **Success response:** `200 OK` — `{ "userId": "...", "role": "MODERATOR" }`
+- **Errors:** `400` — invalid `userId` or `role`; `401`; `403` (caller isn't
+  `SUPER_ADMIN`); `404` — no such user; `500`.
+
+### Becoming the first admin
+There is no self-serve "become admin" flow, anywhere — that's intentional, promoting an
+account to any admin role is a security-sensitive action and must be done by directly
+editing the database. See `SETUP.md`/`MOCK_FEATURES.md` for the exact `mongosh`
+command a real deployment needs to run once, manually, to create its first
+`SUPER_ADMIN` account.
 
 ## 12. Analytics — `[PLANNED]`
 

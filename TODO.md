@@ -122,11 +122,23 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
 - [ ] Audit log for admin actions
 
 ### Subscription (basic)
-- [ ] Subscription plan model (CG_PLUS, CG_PRO, CG_ELITE), admin-editable pricing
-- [ ] Paywall UI for premium features
-- [ ] Server-side entitlement checks
-- [ ] Razorpay integration — MOCK/TEMPORARY acceptable until wired for real (mark clearly
-      in MOCK_FEATURES.md)
+- [x] Subscription plan model (CG_PLUS, CG_PRO, CG_ELITE), admin-editable pricing —
+      `backend/models/Plan.js` (DB-backed, idempotently seeded at startup — see
+      `docs/DATABASE_SCHEMA.md`'s `plans` section), `backend/models/Subscription.js`,
+      `GET /api/plans`, `GET/POST /api/subscription/*`
+      (`backend/routes/subscription.js`)
+- [x] Paywall UI for premium features — `frontend/src/pages/Subscription.jsx` (plan
+      cards + mock-checkout Subscribe button), current-plan status + Cancel button on
+      `frontend/src/pages/Settings.jsx`
+- [x] Server-side entitlement checks — `backend/utils/entitlementUtils.js#hasFeature()`,
+      always DB-backed, never a client claim; demonstrated on the discovery feed's
+      free-tier daily like limit (20/day, see `docs/BUSINESS_PLAN.md`) in
+      `POST /api/discovery/swipe`
+- [x] Razorpay integration — MOCK/TEMPORARY acceptable until wired for real (mark clearly
+      in MOCK_FEATURES.md) — `POST /api/subscription/subscribe` is an explicit MOCK
+      checkout (immediate activation, no real payment/webhook) — see
+      `MOCK_FEATURES.md`'s Razorpay entry and `docs/API_DOCUMENTATION.md`'s §9 for the
+      full gap writeup; **not production-ready as-is**
 
 ### Cross-cutting MVP work
 - [ ] Security hardening pass (see docs/ARCHITECTURE.md + security requirements)

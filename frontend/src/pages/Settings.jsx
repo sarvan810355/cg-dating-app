@@ -48,6 +48,111 @@ function Toggle({ checked, onChange, disabled, label }) {
   );
 }
 
+// Task #12 — Subscription scaffolding: "Free" vs active-plan-name+expiry
+// status, reachable from Settings per the task spec, with a Cancel button
+// when subscribed. The fuller plan comparison/upgrade flow lives on the
+// dedicated /subscription page (frontend/src/pages/Subscription.jsx) — this
+// is just a status summary + entry point.
+function formatDate(dateStr) {
+  if (!dateStr) return '';
+  return new Date(dateStr).toLocaleDateString('en-IN', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
+function MembershipSection() {
+  const [subscription, setSubscription] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getMySubscription()
+      .then((data) => {
+        if (!cancelled) setSubscription(data.subscription || null);
+      })
+      .catch(() => {
+        if (!cancelled) setSubscription(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleCancel() {
+    setCancelling(true);
+    setError('');
+    try {
+      const data = await api.cancelSubscription();
+      setSubscription(data.subscription);
+    } catch (err) {
+      setError(err.message || 'Could not cancel your subscription — try again');
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  return (
+    <section className="mb-4 rounded-2xl border border-border bg-surface p-5">
+      <h2 className="mb-1 text-lg font-semibold text-text-primary">Membership</h2>
+      {loading && <p className="py-2 text-sm text-text-secondary">Loading…</p>}
+      {!loading && (
+        <>
+          {error && <p className="mb-2 text-xs text-error">{error}</p>}
+          {subscription && subscription.status === 'ACTIVE' ? (
+            <>
+              <p className="text-sm text-text-primary">
+                {subscription.plan?.name}{' '}
+                <span className="text-xs text-text-secondary">
+                  · renews {formatDate(subscription.expiresAt)}
+                </span>
+              </p>
+              <div className="mt-3 flex gap-2">
+                <Link to="/subscription">
+                  <Button variant="ghost">Manage plan</Button>
+                </Link>
+                <Button variant="destructive" disabled={cancelling} onClick={handleCancel}>
+                  Cancel
+                </Button>
+              </div>
+            </>
+          ) : subscription && subscription.status === 'CANCELLED' ? (
+            <>
+              <p className="text-sm text-text-primary">
+                {subscription.plan?.name}{' '}
+                <span className="text-xs text-text-secondary">
+                  · cancelled, access until {formatDate(subscription.expiresAt)}
+                </span>
+              </p>
+              <Link to="/subscription">
+                <Button variant="ghost" className="mt-3">
+                  View plans
+                </Button>
+              </Link>
+            </>
+          ) : (
+            <>
+              <p className="text-sm text-text-primary">Free</p>
+              <Link to="/subscription">
+                <Button variant="primary" className="mt-3">
+                  Upgrade
+                </Button>
+              </Link>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function Settings() {
   const [preferences, setPreferences] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -101,6 +206,8 @@ function Settings() {
         {error && (
           <p className="mb-4 rounded-lg bg-error-subtle px-3 py-2 text-sm text-error">{error}</p>
         )}
+
+        <MembershipSection />
 
         <section className="rounded-2xl border border-border bg-surface p-5">
           <h2 className="mb-1 text-lg font-semibold text-text-primary">Notifications</h2>

@@ -22,8 +22,27 @@ Core account/auth record.
   signup; signup is currently email/password only.
 - `email` (unique, sparse, indexed) — optional
 - `passwordHash` `[NEVER EXPOSED]`
-- `role` — enum: `USER`, `SUPER_ADMIN`, `ADMIN`, `MODERATOR`, `SUPPORT`, `ANALYST` (default `USER`)
-- `status` — enum: `ACTIVE`, `SUSPENDED`, `BANNED`, `DELETED`
+- `role` — `[IMPLEMENTED, Task #11]` enum: `USER`, `SUPER_ADMIN`, `ADMIN`,
+  `MODERATOR` (default `USER`). **Divergence:** the originally-drafted enum
+  also included `SUPPORT`/`ANALYST` — Task #11 (Admin panel, basic; see
+  `docs/ROADMAP.md`'s Phase 9) implements only the 4 values above, since no
+  route/permission in this pass needs to distinguish a support-only or
+  analyst-only role (no dedicated support queue, and no analytics dashboard
+  yet — that's the future Task #13/Phase 12 scope). See
+  `backend/constants/adminOptions.js#USER_ROLES`; widen the enum back to 6
+  whenever a route actually needs those two values.
+- `accountStatus` — `[IMPLEMENTED, Task #11]` enum: `ACTIVE`, `SUSPENDED`
+  (default `ACTIVE`). **Divergence:** the originally-drafted field was named
+  `status` with a 4-value enum (`ACTIVE`, `SUSPENDED`, `BANNED`, `DELETED`) —
+  implemented instead as `accountStatus` (avoids any ambiguity with other
+  status-like fields already on this document, e.g. verification statuses)
+  with just the 2 values this basic moderation pass actually uses; there is
+  no permanent-ban or account-deletion flow built yet, only a reversible
+  suspend/reinstate pair (`PATCH /api/admin/users/:userId/suspend` /
+  `.../reinstate`, see `docs/API_DOCUMENTATION.md`'s Admin section). A
+  suspended account is blocked at login (`backend/routes/auth.js`) and
+  excluded from the discovery feed (`backend/routes/discovery.js`). Widen
+  back to `BANNED`/`DELETED` if/when a permanent-removal flow is built.
 - `mobileVerification`, `photoVerification` — see the `verifications`
   section below; **this replaced the originally drafted plain
   `isPhoneVerified`/`isPhotoVerified` booleans** once Task #9 actually
@@ -31,9 +50,17 @@ Core account/auth record.
   `NOT_VERIFIED`/`PENDING`/`VERIFIED`/`REJECTED`/`EXPIRED` state machine per
   level, not just a boolean.
 - `trustScore` `[NEVER EXPOSED]` — internal only, used by moderation/matching heuristics — **not implemented yet**, no code path sets or reads this.
+- `dailyLikeCount`, `lastLikeCountReset` — Task #12 (Subscription
+  scaffolding). Free-tier daily LIKE quota tracking, reset once per UTC
+  calendar day — see the `plans`/`subscriptions` sections below and
+  `backend/utils/entitlementUtils.js#tryConsumeDailyLike()`. Not part of the
+  original draft; added because enforcing the freemium daily-like limit
+  (`docs/BUSINESS_PLAN.md`) needed *some* per-user counter, and this is the
+  same "1:1-with-user, always-fetched-together account state" pattern
+  already used for `notificationPreferences`/`mobileVerification` above.
 - `createdAt`, `updatedAt`, `lastLoginAt`
-- Indexes: unique+sparse on `email`; index on `role` (admin queries — role
-  field itself not yet implemented, see `admin_users` below).
+- Indexes: unique+sparse on `email`; index on `role` (admin queries — see
+  `admin_users` below, now `[IMPLEMENTED]`).
   **Divergence:** `phone` is **not** unique-indexed in the implemented
   schema (`backend/models/User.js`) — signup doesn't collect a phone number
   at all (email/password only), and Task #9 lets a caller set/change their
@@ -342,13 +369,13 @@ present in it at all) — see below.
   plain strings only — no file-upload path exists for report evidence in
   this pass, see `MOCK_FEATURES.md`.
 - `status` — enum: `PENDING` (default), `REVIEWED`, `ACTION_TAKEN`,
-  `DISMISSED`. No code path in this pass ever transitions a report away from
-  `PENDING` — that's the future Admin moderation queue's job (Task #11, see
-  `docs/API_DOCUMENTATION.md`'s Admin section).
-- `reviewedAt` (`Date`, null until a moderator acts on it — not set by
-  anything in this pass)
-- `reviewedBy` (ref `users`, admin; null until reviewed — not set by
-  anything in this pass)
+  `DISMISSED`. `[IMPLEMENTED, Task #11]` — `PATCH /api/admin/reports/:id`
+  (role: `MODERATOR`+) now transitions a report to one of the three
+  non-`PENDING` values, see `docs/API_DOCUMENTATION.md`'s Admin section.
+- `reviewedAt` (`Date`, null until a moderator acts on it — set by
+  `PATCH /api/admin/reports/:id`)
+- `reviewedBy` (ref `users`, admin; null until reviewed — set to the acting
+  admin's id by `PATCH /api/admin/reports/:id`)
 - `reviewNotes` `[NEVER EXPOSED]` — private moderation notes; `select: false`
   on the schema so a default `Report.find()`/`findById()` never loads it, on
   top of the global field-level access rule at the top of this document.
@@ -417,49 +444,111 @@ reserved for future use — a stale pending photo review).
     window of recent `request-otp` calls, used for rate limiting (max 3
     requests per 10-minute window).
 - `users.photoVerification`:
-  - `status` — same 5-value enum as above.
-  - `verifiedAt` (`Date`, null until `VERIFIED` — no code path sets this yet
-    in this pass, since photo approval is an Admin-panel action not built
-    yet; see the MOCK/TEMPORARY note in `docs/API_DOCUMENTATION.md`'s
-    Verification section).
+  - `status` — same 5-value enum as above. `[IMPLEMENTED, Task #11]` —
+    `PATCH /api/admin/verifications/photo/:userId` (role: `MODERATOR`+) now
+    transitions a `PENDING` submission to `VERIFIED`/`REJECTED`.
+  - `verifiedAt` (`Date`, null until `VERIFIED` — now set by
+    `PATCH /api/admin/verifications/photo/:userId` on approval, and cleared
+    back to `null` on rejection).
   - `submittedPhotoUrl` — the selfie submitted for review. **MOCK/TEMPORARY**
     storage, same non-Cloudinary pattern as `profiles.photos` (real external
     URL, or a base64 `data:` URI stored directly on the document — see
     `backend/utils/mockImageUpload.js` and `MOCK_FEATURES.md`). Returned to
-    the **owner** of the submission (`GET /api/verification/status`), but
-    `[NEVER EXPOSED as raw evidence to OTHER users]` — any other user's view
-    of this profile only ever sees the derived `photoVerified` boolean, via
+    the **owner** of the submission (`GET /api/verification/status`) and —
+    `[IMPLEMENTED, Task #11]` — to an **admin/moderator** reviewing the
+    queue (`GET /api/admin/verifications/photo`), but
+    `[NEVER EXPOSED as raw evidence to any OTHER, non-admin user]` — a
+    regular user's view of this profile only ever sees the derived
+    `photoVerified` boolean, via
     `backend/utils/verificationUtils.js#toPublicVerificationBadges()`.
   - `submittedAt` (`Date`).
   - `reviewNotes`, `reviewedBy` (ref `users`, admin), `reviewedAt`
-    `[NEVER EXPOSED]` — reserved fields for the future Admin panel's
-    verification review queue (docs/ROADMAP.md's Phase 9); `select: false`
-    on the schema; no code path reads or writes them in this pass beyond
-    resetting them to `null` on a fresh resubmission.
+    `[NEVER EXPOSED]` — `[IMPLEMENTED, Task #11]`: `reviewedBy`/`reviewedAt`
+    are now set by `PATCH /api/admin/verifications/photo/:userId`;
+    `reviewNotes` remains reserved/unused (no route accepts a note on this
+    particular action — only the Report review route,
+    `PATCH /api/admin/reports/:id`, takes a `reviewNotes` body field).
+    `select: false` on the schema, still reset to `null` on a fresh
+    resubmission.
 - No dedicated indexes beyond the ones `users` already has — verification
   state is always looked up by the owning user's `_id` (already the primary
   key), never queried independently across users in this MVP pass (the
   future Admin review queue will need a `(photoVerification.status)` index
   once it's built — not added preemptively here).
 
-### `subscriptions`
-- `_id`, `userId` (ref `users`, indexed), `plan` (`CG_PLUS`, `CG_PRO`, `CG_ELITE`),
-  `status` (`ACTIVE`, `EXPIRED`, `CANCELLED`), `startedAt`, `expiresAt`,
-  `autoRenew` (bool)
-- Indexes: index on `(userId, status)`.
+### `plans` — `[IMPLEMENTED, with divergences from the original draft below]`
+Task #12 (Subscription scaffolding, see `docs/ROADMAP.md`). Implemented in
+`backend/models/Plan.js`; routes in `backend/routes/subscription.js`.
+**Divergence from the original draft:** this collection didn't exist in the
+original draft at all — pricing/features were assumed to live only on the
+`subscriptions` row below (or be hardcoded). A separate, DB-backed `Plan`
+collection was added instead because `docs/BUSINESS_PLAN.md` explicitly
+requires plan naming/pricing to be **admin-editable, never hardcoded** — a
+constants-file approach couldn't satisfy that without a deploy per price
+change.
+- `_id`, `code` (unique — `CG_PLUS`, `CG_PRO`, `CG_ELITE`), `name`,
+  `priceInPaise` (Number — India-first, priced in paise not rupees to avoid
+  float rounding on currency, same reasoning as `payments.amount` below),
+  `billingPeriod` (`monthly`, `yearly`), `features` (array of strings, e.g.
+  `unlimited_likes`, `advanced_filters`, `see_who_liked_you`, `boost`,
+  `incognito`), `isActive` (bool)
+- Indexes: unique on `code`.
+- Seeding: the three default plans are seeded **idempotently at server
+  startup** (`backend/utils/entitlementUtils.js#seedDefaultPlans()`, called
+  from `backend/server.js`'s `mongoose.connect().then()`) — it only ever
+  *inserts* a plan whose `code` doesn't already exist, so an admin's later
+  price/feature edits are never overwritten by a restart. No Admin-panel
+  pricing screen exists yet to make those edits through (that's a separate,
+  not-yet-built piece of the Admin panel task, TODO.md's Admin section) —
+  for now, editing a seeded plan means a direct DB write.
 
-### `payments`
-- `_id`, `userId` (ref `users`, indexed), `subscriptionId` (ref `subscriptions`),
-  `provider` (`RAZORPAY`), `providerPaymentId`, `amount`, `currency`, `status`
-  (`CREATED`, `PAID`, `FAILED`, `REFUNDED`), `webhookVerifiedAt`, `createdAt`
-- Indexes: index on `userId`; unique on `providerPaymentId`.
-- Note: entitlement is only ever granted/updated from a **verified webhook**, never
-  from a client-reported "payment succeeded" call.
+### `subscriptions` — `[IMPLEMENTED, with divergences from the original draft below]`
+Implemented in `backend/models/Subscription.js`; routes in
+`backend/routes/subscription.js`.
+- `_id`, `user` (ref `users`, indexed — field named `user`, not `userId`, to
+  match the existing ref-field convention already in this codebase — see
+  `profiles.user`), `plan` (ref `plans`, **not** an inline enum string — see
+  the `plans` divergence note above), `status` (`ACTIVE`, `EXPIRED`,
+  `CANCELLED`), `startedAt`, `expiresAt`, `cancelledAt`, `paymentProvider`
+  (`mock_razorpay` — **MOCK/TEMPORARY**, see below), `paymentReference`
+  (string, fake/generated — **MOCK/TEMPORARY**)
+- Indexes: compound `(user, status, expiresAt)`.
+- **Divergence from the original draft:** no `autoRenew` boolean — this MVP
+  pass never auto-renews anything (there's no billing cycle job / real
+  payment provider to trigger a renewal from); a "subscribed" action always
+  creates a brand-new `ACTIVE` row via the mock checkout below, and expiry
+  is a one-shot `expiresAt` timestamp.
+- "The caller's current subscription" (`GET /api/subscription/me`,
+  `backend/utils/entitlementUtils.js#getEffectiveSubscription()`) is derived
+  by querying for the most-recently-expiring row that is either `ACTIVE`, or
+  `CANCELLED` but not yet past `expiresAt` — cancelling stops renewal, it
+  does **not** immediately revoke access (standard SaaS behavior). This is
+  also exactly what `hasFeature()` (see below) checks — a cancelled-but-
+  still-valid subscriber keeps their features until `expiresAt`.
 
-### `boosts`
-- `_id`, `userId` (ref `users`, indexed), `startedAt`, `expiresAt`, `source`
-  (`PURCHASED`, `PROMOTIONAL`)
-- Indexes: compound `(userId, expiresAt)`.
+### `payments` — **not implemented as a separate collection; MOCK/TEMPORARY payment fields live on `subscriptions` instead**
+**Divergence from the original draft:** there is no real Razorpay
+integration in this codebase (no credentials configured — see
+`MOCK_FEATURES.md`), so a full `payments` collection (with `providerPaymentId`,
+`amount`, `currency`, a `CREATED`/`PAID`/`FAILED`/`REFUNDED` status machine,
+and a `webhookVerifiedAt` signature-verification timestamp) was not built —
+there is no webhook receiver anywhere in this pass. Instead,
+`subscriptions.paymentProvider`/`paymentReference` record just enough to
+trace which subscriptions came from the mock checkout path. **This is the
+single most important gap to close before this ships to real users:**
+`POST /api/subscription/subscribe` (`backend/routes/subscription.js`)
+immediately marks a subscription `ACTIVE` on nothing more than the caller
+being authenticated — there is no real payment collected, no Razorpay order
+created, and no verified webhook gating activation. A real integration
+would restore something like this `payments` collection (with its
+`webhookVerifiedAt` field) as the **only** path allowed to flip a
+subscription to `ACTIVE`, exactly as the original draft's note already said:
+entitlement must only ever be granted/updated from a **verified webhook**,
+never a client-reported "payment succeeded" call. See `MOCK_FEATURES.md`'s
+Razorpay entry and `docs/API_DOCUMENTATION.md`'s Subscription section for
+the full mock-checkout explanation.
+
+### `boosts` — **not implemented** (Profile Boost is `PLAN_FEATURES`-listed but not yet enforced anywhere — see `docs/DATABASE_SCHEMA.md`'s `plans` section and `MOCK_FEATURES.md`)
 
 ### `events`
 (V3 — CG Connect local events)
@@ -487,23 +576,59 @@ reserved for future use — a stale pending photo review).
   `code`, `status` (`PENDING`, `REWARDED`), `rewardedAt`
 - Indexes: unique on `code`; index on `referrerUserId`.
 
-### `admin_users` (role field on `users`)
+### `admin_users` (role field on `users`) — `[IMPLEMENTED, Task #11]`
 Roles are modeled as the `role` enum field directly on `users` (see above) rather than
-a separate collection, to keep authz checks a single lookup. No separate collection
-planned unless a future need (e.g. per-admin fine-grained permissions beyond the role
-enum) requires it.
+a separate collection, to keep authz checks a single lookup — implemented exactly as
+originally planned here. No separate collection built (or currently planned) unless a
+future need (e.g. per-admin fine-grained permissions beyond the role enum) requires it.
+Enforced by `backend/middleware/adminAuth.js#requireRole(...)`, which runs after
+`backend/middleware/auth.js`'s `requireAuth` on every `/api/admin/*` route (see
+`docs/API_DOCUMENTATION.md`'s Admin section) — it does **not** re-verify the JWT itself,
+only adds the role check on top of the already-authenticated caller, so there is still
+exactly one place in this codebase that owns JWT secret/token handling.
 
-### `moderation_actions`
-- `_id`, `adminUserId` (ref `users`), `targetUserId` (ref `users`, indexed),
-  `action` (`WARN`, `SUSPEND`, `BAN`, `UNBAN`, `VERIFY_APPROVE`, `VERIFY_REJECT`, ...),
-  `reason`, `relatedReportId` (ref `reports`, nullable), `createdAt`
-- Indexes: index on `targetUserId`; index on `adminUserId`.
+### `moderation_actions` — **not implemented as a separate collection**
+Task #11 (Admin panel, basic; see `docs/ROADMAP.md`'s Phase 9) folds this concept into
+the more general `audit_logs` collection below instead of a dedicated
+`moderation_actions` collection — every admin mutation (report review, photo
+verification approve/reject, suspend/reinstate, role change) writes one `AuditLog` entry
+via `backend/utils/auditUtils.js#writeAuditLog()`, with `action` as a free string (e.g.
+`'user.suspended'`) rather than a closed `WARN`/`SUSPEND`/`BAN`/... enum. This section is
+kept here as a reminder of the target shape if a moderator ever needs a stricter,
+enum-typed action log distinct from the general audit trail; not needed for this basic
+pass.
 
-### `audit_logs`
-- `_id`, `actorUserId` (ref `users`, admin), `action`, `entityType`, `entityId`,
-  `metadata` (object) `[metadata may contain private notes — NEVER EXPOSED to non-admin
-  API responses]`, `createdAt`
-- Indexes: index on `(entityType, entityId)`; index on `createdAt`.
+### `audit_logs` — `[IMPLEMENTED, Task #11, with divergences from the original draft below]`
+Implemented in `backend/models/AuditLog.js`; written from every state-changing route in
+`backend/routes/admin.js` via `backend/utils/auditUtils.js#writeAuditLog()` (report
+review, photo-verification approve/reject, suspend, reinstate, role change) — see
+`docs/API_DOCUMENTATION.md`'s Admin section for exactly which action strings each route
+writes.
+
+**Divergences from the original draft:** `actorUserId` → `actor` (matches this
+codebase's `ref`-naming convention already used by `Like.fromUser`/`Match.userA`/
+`Report.reporter` etc. — drops the `Id` suffix on ref fields); the generic
+`entityType`/`entityId` pair is replaced by a single `targetUserId` (ref `users`,
+nullable) — every admin action in this basic pass targets a user (or no particular
+entity, e.g. none currently), so a generic polymorphic reference isn't needed yet (see
+the `moderation_actions` note above for the fuller shape this could grow into);
+`metadata` → `details` (same free-form-object role, renamed only to avoid confusion with
+Mongo's own connotations of "metadata").
+- `_id`, `actor` (ref `users`, admin, required), `action` (free string, e.g.
+  `'report.reviewed'`, `'user.suspended'`, `'user.reinstated'`, `'user.role_changed'`,
+  `'verification.approved'`, `'verification.rejected'` — not a closed enum, so a new
+  admin action never requires a schema change), `targetUserId` (ref `users`, nullable),
+  `details` (object) `[may contain private moderation context — NEVER EXPOSED to
+  non-admin API responses; no route in this pass exposes AuditLog documents to any API
+  response at all, admin or otherwise — there is no `GET /api/admin/audit-logs` route
+  yet, see `docs/API_DOCUMENTATION.md`'s Admin section note]`, `createdAt` only (no
+  `updatedAt` — an audit entry is never edited in place, same pattern already used for
+  `Like`/`Notification`/`Report`).
+- Indexes: index on `createdAt` (the actual "recent admin activity" access pattern, for
+  whenever a `GET /api/admin/audit-logs` view is built). No `(entityType, entityId)`
+  index (that pair doesn't exist in the implemented shape) — a `targetUserId` index can
+  be added later if "all audit entries about this user" becomes a real query need; not
+  added preemptively here since nothing queries it yet.
 
 ---
 

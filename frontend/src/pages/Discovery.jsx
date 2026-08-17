@@ -93,6 +93,11 @@ function Discovery() {
   const [swiping, setSwiping] = useState(false);
   const [error, setError] = useState('');
   const [matchInfo, setMatchInfo] = useState(null);
+  // Task #12 — Subscription scaffolding: set when POST /api/discovery/swipe
+  // returns 429 { upgradeRequired: true } (the free-tier daily like limit —
+  // see docs/BUSINESS_PLAN.md). Shown as a friendly upgrade prompt instead
+  // of a raw error message.
+  const [limitReached, setLimitReached] = useState(false);
 
   const loadPage = useCallback(async (nextPage) => {
     try {
@@ -141,6 +146,7 @@ function Discovery() {
     if (!current || swiping) return;
     setSwiping(true);
     setError('');
+    setLimitReached(false);
     try {
       const data = await api.swipe(current.userId, action);
       setQueue((prev) => prev.slice(1));
@@ -151,11 +157,20 @@ function Discovery() {
         setMatchInfo({ ...current, matchId: data.match?.id });
       }
     } catch (err) {
-      // A 409 "already swiped" shouldn't normally happen from this UI (the
-      // card is removed from the queue right after a successful swipe), but
-      // if it does — e.g. a duplicate tap — just drop the card instead of
-      // showing a scary error.
-      if (/already swiped/i.test(err.message || '')) {
+      // Task #12 — Subscription scaffolding: the free-tier daily like limit
+      // (backend/routes/discovery.js's POST /swipe) responds 429 with
+      // `upgradeRequired: true` — checked via `err.data` (attached by
+      // frontend/src/api.js), not by guessing from the message text, unlike
+      // the 409 "already swiped" case below. The card stays in the queue
+      // (the swipe was never recorded) so the user can act on it later —
+      // e.g. after upgrading — without losing their place.
+      if (err.status === 429 && err.data?.upgradeRequired) {
+        setLimitReached(true);
+      } else if (/already swiped/i.test(err.message || '')) {
+        // A 409 "already swiped" shouldn't normally happen from this UI
+        // (the card is removed from the queue right after a successful
+        // swipe), but if it does — e.g. a duplicate tap — just drop the
+        // card instead of showing a scary error.
         setQueue((prev) => prev.slice(1));
       } else {
         setError(err.message || 'Could not record your swipe');
@@ -183,6 +198,31 @@ function Discovery() {
 
         {error && (
           <p className="mb-4 rounded-lg bg-error-subtle px-3 py-2 text-sm text-error">{error}</p>
+        )}
+
+        {limitReached && (
+          <div className="mb-4 rounded-lg border border-primary/30 bg-primary-subtle px-4 py-3">
+            <p className="text-sm font-medium text-text-primary">
+              You&rsquo;ve hit today&rsquo;s like limit
+            </p>
+            <p className="mt-0.5 text-xs text-text-secondary">
+              Upgrade to CG_PLUS for unlimited likes, or come back tomorrow — you can still Pass.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Link to="/subscription">
+                <Button className="text-xs" onClick={() => setLimitReached(false)}>
+                  Upgrade
+                </Button>
+              </Link>
+              <Button
+                variant="ghost"
+                className="text-xs"
+                onClick={() => setLimitReached(false)}
+              >
+                Dismiss
+              </Button>
+            </div>
+          </div>
         )}
 
         {loading && (

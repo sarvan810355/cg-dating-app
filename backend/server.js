@@ -14,7 +14,9 @@ const notificationsRouter = require('./routes/notifications');
 const verificationRouter = require('./routes/verification');
 const reportsRouter = require('./routes/reports');
 const blocksRouter = require('./routes/blocks');
+const subscriptionRouter = require('./routes/subscription');
 const { initSocket } = require('./socket');
+const { seedDefaultPlans } = require('./utils/entitlementUtils');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -35,6 +37,15 @@ app.use('/api/notifications', notificationsRouter);
 app.use('/api/verification', verificationRouter);
 app.use('/api/reports', reportsRouter);
 app.use('/api/blocks', blocksRouter);
+// Task #12 — Subscription scaffolding. Mounted at the bare /api root
+// (rather than /api/subscription) because this single router serves two
+// different base paths per the task spec: the public GET /api/plans
+// listing, and the auth-protected /api/subscription/* actions — see
+// backend/routes/subscription.js's own route declarations for the full
+// paths. Divergence from docs/DATABASE_SCHEMA.md's originally-`[PLANNED]`
+// /api/subscriptions (plural) + /api/payments base paths — see
+// docs/API_DOCUMENTATION.md's Subscription section for the divergence note.
+app.use('/api', subscriptionRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'CG Dating API' });
@@ -44,7 +55,22 @@ app.get('/', (req, res) => {
 // reachable yet (e.g. during local scaffolding before Mongo is running).
 mongoose
   .connect(MONGODB_URI)
-  .then(() => console.log('MongoDB connected'))
+  .then(async () => {
+    console.log('MongoDB connected');
+    // Task #12 — Subscription scaffolding: idempotently seed the three
+    // default plans (CG_PLUS/CG_PRO/CG_ELITE) on startup if they don't
+    // already exist — see backend/utils/entitlementUtils.js#seedDefaultPlans()
+    // for why this never overwrites an admin's later edits.
+    try {
+      const seeded = await seedDefaultPlans();
+      const createdCodes = seeded.filter((s) => s.created).map((s) => s.code);
+      if (createdCodes.length > 0) {
+        console.log(`Seeded default plans: ${createdCodes.join(', ')}`);
+      }
+    } catch (err) {
+      console.error('Plan seeding error:', err.message);
+    }
+  })
   .catch((err) => {
     console.error('MongoDB connection error:', err.message);
     console.warn('Continuing without a database connection.');

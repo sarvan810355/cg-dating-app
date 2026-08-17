@@ -76,25 +76,46 @@ move items to "Resolved" rather than deleting them, so there's a record of what 
       actual API call — the rest of the flow (hashing, expiry, rate
       limiting, the `mobileVerification` state machine) would not need to
       change.
-- [ ] **Photo/selfie verification — no automated face-match, manual-review
-      queue item.** `POST /api/verification/photo/submit`
-      (`backend/routes/verification.js`) reuses the exact same
-      MOCK/TEMPORARY photo-storage pattern already used for profile photos
-      (`backend/utils/mockImageUpload.js`, no Cloudinary — see the profile-
-      photo entry above) and gets `photoVerification.status` to `PENDING`.
-      There is, and was never intended to be in this MVP pass, any automated
-      face-match against the user's profile photos — real human review is
-      required to transition a submission to `VERIFIED`/`REJECTED`, and no
-      code path does that yet (that's the future Admin panel's verification
-      review queue, `docs/ROADMAP.md`'s Phase 9 / `GET`/
-      `PUT /api/admin/verifications*` in `docs/API_DOCUMENTATION.md`). This
-      is a genuine scope boundary, not a stand-in for something planned to
-      auto-approve later.
-- [ ] **Razorpay (payments/subscriptions) — no credentials configured.** Subscription plans
-      and paywall UI are planned as part of MVP, but real payment processing may ship as
-      MOCK/TEMPORARY first (e.g. a fake "success" entitlement toggle) if Razorpay isn't
-      wired up in time — any such mock MUST be labeled clearly in code comments and in this
-      file, and entitlement checks must still happen server-side even in mock mode.
+- [ ] **Photo/selfie verification — no automated face-match, and photo
+      storage itself is still MOCK/TEMPORARY.** `POST
+      /api/verification/photo/submit` (`backend/routes/verification.js`)
+      reuses the exact same MOCK/TEMPORARY photo-storage pattern already
+      used for profile photos (`backend/utils/mockImageUpload.js`, no
+      Cloudinary — see the profile-photo entry above). **The manual-review
+      queue itself is now real** — see this file's Resolved section below —
+      but there is, and was never intended to be in this MVP pass, any
+      automated face-match against the user's profile photos; a human
+      moderator must always approve/reject via
+      `PATCH /api/admin/verifications/photo/:userId`. This remaining piece
+      (no auto-approve) is a genuine, permanent scope boundary, not a
+      stand-in for something planned to be automated later.
+- [ ] **Razorpay (payments/subscriptions) — no credentials configured, MOCK/TEMPORARY
+      checkout implemented instead.** Task #12 (Subscription scaffolding, see
+      `docs/ROADMAP.md`) implemented real, non-mocked plan management and entitlement
+      logic: `backend/models/Plan.js`/`Subscription.js` (DB-backed, admin-editable
+      plans per `docs/BUSINESS_PLAN.md` — never hardcoded), `GET /api/plans`,
+      `GET/POST /api/subscription/*` (`backend/routes/subscription.js`), and — most
+      importantly — `backend/utils/entitlementUtils.js#hasFeature()`, a real
+      server-side entitlement check that always re-queries the database and is never
+      fooled by a client-submitted "isPremium" claim. What's mocked is purely the
+      **payment collection** step: there is no Razorpay account/credentials, so
+      `POST /api/subscription/subscribe` skips straight from "authenticated request"
+      to "ACTIVE subscription, no money changed hands" — no Razorpay order is ever
+      created, no checkout redirect happens, and there is no
+      `POST /api/payments/webhook` receiver anywhere in this codebase.
+      `paymentProvider: 'mock_razorpay'` and a fake generated `paymentReference` are
+      recorded on the Subscription document precisely so these mock-path rows stay
+      traceable and are never mistaken for a real transaction. **Wiring a real
+      integration would mean:** creating a Razorpay order in `POST /subscribe`
+      instead of immediately activating, returning that order to the client to open
+      Razorpay Checkout, and adding a signature-verified `POST /api/payments/webhook`
+      that is the *only* path allowed to flip a subscription to `ACTIVE` (replacing
+      today's "activate on request" behavior entirely) — see
+      `docs/DATABASE_SCHEMA.md`'s `payments` section and
+      `docs/API_DOCUMENTATION.md`'s Subscription section (§9) for the full gap
+      writeup. **This must not ship to production as-is** — anyone who can call
+      `POST /api/subscription/subscribe` while authenticated currently gets any plan
+      for free.
 - [ ] **Anthropic Claude API (AI features) — no credentials configured.** AI Icebreakers,
       Why-You-Match, Profile Coach, Date Ideas are all V2 scope and not started.
 - [ ] **Chat is text-only for this pass — not a mock, a documented scope reduction.**
@@ -124,17 +145,40 @@ move items to "Resolved" rather than deleting them, so there's a record of what 
       (mocked) base64-or-URL path. Nothing here needs replacing later so much
       as extending, if/when evidence upload is prioritized.
 - [ ] **No automated spam/scam/abuse detection — out of scope for this task,
-      planned as the future "Trust Engine" (V3).** Task #10 (Report/Block,
-      see `docs/ROADMAP.md`'s Phase 8) is entirely manual: a user reports
-      another user, and every report sits `PENDING` until a human moderator
-      acts on it via the future Admin panel (Task #11). There is no
-      automated signal (message-content scanning, image/face-match
-      verification-fraud detection, behavioral pattern flags, repeat-report
-      auto-suspension, etc.) anywhere in this pass — that's the explicitly
-      later-phase "Trust Engine" / AI-assisted moderation concept (V3 scope,
-      see `docs/BUSINESS_PLAN.md`/`docs/ROADMAP.md`), not something this task
+      planned as the future "Trust Engine" (V3).** Report/Block filing
+      (Task #10, see `docs/ROADMAP.md`'s Phase 8) and report *review*
+      (Task #11's moderation queue — now real, see this file's Resolved
+      section) are both entirely manual: a user reports another user, a
+      human admin/moderator reviews and resolves it via
+      `PATCH /api/admin/reports/:id`. There is no automated signal
+      (message-content scanning, image/face-match verification-fraud
+      detection, behavioral pattern flags, repeat-report auto-suspension,
+      etc.) anywhere in this pass — that's the explicitly later-phase "Trust
+      Engine" / AI-assisted moderation concept (V3 scope, see
+      `docs/BUSINESS_PLAN.md`/`docs/ROADMAP.md`), not something this task
       attempted or partially mocked.
 
 ## Resolved (mocks replaced with real implementations)
 
-None yet.
+- [x] **Reports and photo-verification moderation queues (Task #11 — Admin
+      panel, basic; see `docs/ROADMAP.md`'s Phase 9).** Previously, both
+      `Report.status` (Task #10) and `photoVerification.status` (Task #9)
+      could reach `PENDING` but nothing ever transitioned them further —
+      every report and every photo submission sat unreviewed forever. Now
+      real: `GET/PATCH /api/admin/reports*` and
+      `GET/PATCH /api/admin/verifications/photo*` (`backend/routes/
+      admin.js`, role-gated `MODERATOR`+ via `backend/middleware/
+      adminAuth.js`) let an admin/moderator actually resolve a report
+      (`REVIEWED`/`ACTION_TAKEN`/`DISMISSED`, with an optional private
+      `reviewNotes`) or approve/reject a pending selfie
+      (`VERIFIED`/`REJECTED`). Every such action writes an `AuditLog` entry
+      (`backend/models/AuditLog.js`, `backend/utils/auditUtils.js`). Also
+      added: `role`/`accountStatus` fields on `users`, suspend/reinstate
+      (`PATCH /api/admin/users/:userId/suspend` / `.../reinstate` — blocks
+      login and hides the user from discovery), and a `SUPER_ADMIN`-only
+      role-change route. See `docs/API_DOCUMENTATION.md`'s Admin section for
+      the full route list. **Note:** there is still no self-serve "become
+      admin" flow — see `SETUP.md`'s "Creating the first admin account"
+      section for the one-time manual `mongosh` command a real deployment
+      needs to bootstrap its first `SUPER_ADMIN`, since that's a
+      security-sensitive action left deliberately outside the app itself.

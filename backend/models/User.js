@@ -87,6 +87,17 @@ const UserSchema = new mongoose.Schema(
       reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null, select: false },
       reviewedAt: { type: Date, default: null, select: false },
     },
+
+    // --- Subscription / entitlements (Task #12 — Subscription scaffolding).
+    // Free-tier daily LIKE quota tracking only — the subscription itself
+    // lives in the separate Subscription model (one user can have several
+    // over time; see backend/models/Subscription.js), not here. See
+    // backend/utils/entitlementUtils.js#tryConsumeDailyLike() for the
+    // reset-on-new-UTC-day logic that reads/writes these two fields, and
+    // backend/routes/discovery.js's POST /swipe for where they're enforced.
+    // ---
+    dailyLikeCount: { type: Number, default: 0 },
+    lastLikeCountReset: { type: Date, default: null },
   },
   { timestamps: true }
 );

@@ -10,6 +10,7 @@ const { toPublicProfileJSON } = require('../utils/profileSerializers');
 const { canonicalPair, isMutualLike } = require('../utils/matchUtils');
 const { createNotification } = require('../utils/notificationUtils');
 const { getBlockedUserIds } = require('../utils/blockUtils');
+const { tryConsumeDailyLike } = require('../utils/entitlementUtils');
 const { DATING_INTENTIONS } = require('../constants/profileOptions');
 const {
   SWIPE_ACTIONS,
@@ -206,6 +207,25 @@ router.post('/swipe', requireAuth, async (req, res) => {
         message: `You already swiped '${existing.action}' on this user`,
         like: toLikeJSON(existing),
       });
+    }
+
+    // Task #12 — Subscription scaffolding: server-side entitlement
+    // enforcement demo. Only NEW 'like' swipes consume the free-tier daily
+    // quota (a 'pass' is free; an idempotent repeat of an already-recorded
+    // swipe already returned above and never reaches here). Checked BEFORE
+    // Like.create() so a blocked swipe is never persisted. hasFeature()
+    // (via tryConsumeDailyLike) always re-reads the caller's subscription
+    // from the database — never trusts any client-submitted "isPremium"
+    // claim. See docs/BUSINESS_PLAN.md for the chosen limit.
+    if (action === 'like') {
+      const limitCheck = await tryConsumeDailyLike(req.user.id);
+      if (!limitCheck.allowed) {
+        return res.status(429).json({
+          message: `You've reached today's free like limit (${limitCheck.limit}/day). Upgrade to CG_PLUS for unlimited likes.`,
+          upgradeRequired: true,
+          dailyLikeLimit: limitCheck.limit,
+        });
+      }
     }
 
     let like;

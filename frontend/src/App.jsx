@@ -11,6 +11,7 @@ import Settings from './pages/Settings';
 import Verification from './pages/Verification';
 import BlockedUsers from './pages/BlockedUsers';
 import SafetyCenter from './pages/SafetyCenter';
+import Subscription from './pages/Subscription';
 import ProtectedRoute from './components/ProtectedRoute';
 
 function App() {
@@ -88,6 +89,14 @@ function App() {
         element={
           <ProtectedRoute>
             <SafetyCenter />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/subscription"
+        element={
+          <ProtectedRoute>
+            <Subscription />
           </ProtectedRoute>
         }
       />

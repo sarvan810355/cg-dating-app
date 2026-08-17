@@ -1,0 +1,67 @@
+const mongoose = require('mongoose');
+const {
+  PLAN_CODES,
+  BILLING_PERIODS,
+  PLAN_FEATURES,
+} = require('../constants/subscriptionOptions');
+
+// Configurable subscription plan (Task #12 — Subscription scaffolding).
+// DB-backed (not a hardcoded constant) because docs/BUSINESS_PLAN.md is
+// explicit that plan naming/pricing must be "admin-editable, never
+// hardcoded" — a plain JS constants object couldn't satisfy that without a
+// deploy for every price change. The three default rows are seeded
+// idempotently at server startup (see
+// backend/utils/entitlementUtils.js#seedDefaultPlans()) but nothing here
+// stops an admin from editing a Plan document directly (or, once the Admin
+// panel grows a pricing screen — not built in this pass, see TODO.md's
+// Admin section — through that UI) without a code change.
+const PlanSchema = new mongoose.Schema(
+  {
+    code: {
+      type: String,
+      enum: PLAN_CODES,
+      required: true,
+      unique: true,
+    },
+    name: {
+      type: String,
+      required: true,
+      trim: true,
+    },
+    // India-first, priced in paise (not rupees) to avoid floating-point
+    // rounding on currency — same reasoning docs/DATABASE_SCHEMA.md already
+    // uses for `payments.amount`. The frontend formats paise -> rupees for
+    // display only (see frontend/src/pages/Subscription.jsx).
+    priceInPaise: {
+      type: Number,
+      required: true,
+      min: 0,
+    },
+    billingPeriod: {
+      type: String,
+      enum: BILLING_PERIODS,
+      required: true,
+    },
+    // Feature flags this plan grants — see
+    // backend/constants/subscriptionOptions.js's PLAN_FEATURES and
+    // backend/utils/entitlementUtils.js#hasFeature(), which is the ONLY
+    // code path allowed to read this for entitlement decisions (never a
+    // client-submitted claim).
+    features: {
+      type: [String],
+      enum: PLAN_FEATURES,
+      default: [],
+    },
+    // Inactive plans are kept (not deleted) so existing Subscriptions that
+    // reference them stay resolvable, but GET /api/plans (the public
+    // paywall listing) never surfaces them, and POST /api/subscription/
+    // subscribe refuses to create a new subscription against one.
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+  },
+  { timestamps: true }
+);
+
+module.exports = mongoose.model('Plan', PlanSchema);

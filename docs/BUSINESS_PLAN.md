@@ -17,11 +17,34 @@ search, and friendship, with dating intention as a first-class field.
 - **Free tier** must remain genuinely usable, not a crippled trial: profile creation,
   discovery, a limited number of daily likes, matches, messaging with matches, basic
   filters, and basic (OTP + selfie) verification are all available for free.
+  **Implemented limit (Task #12 — Subscription scaffolding):** **20 likes per UTC
+  calendar day** (passes/"not interested" swipes are unlimited — only a "like" counts
+  against the quota). Enforced server-side in `POST /api/discovery/swipe`
+  (`backend/routes/discovery.js`) via `backend/utils/entitlementUtils.js#tryConsumeDailyLike()`,
+  tracked on `users.dailyLikeCount`/`lastLikeCountReset` (see
+  `docs/DATABASE_SCHEMA.md`). A caller with the `unlimited_likes` plan feature (every
+  paid tier below has it) bypasses the limit entirely. Hitting the limit returns a
+  `429` with `upgradeRequired: true` rather than a generic error — see
+  `docs/API_DOCUMENTATION.md`'s §9 for the exact response shape and
+  `frontend/src/pages/Discovery.jsx` for the upgrade prompt this drives.
 - **Premium tiers** — `CG_PLUS`, `CG_PRO`, `CG_ELITE` (names and pricing admin-editable,
-  never hardcoded) — add: unlimited likes, advanced filters, "see who liked you", profile
-  boost, incognito/invisible browsing, advanced compatibility features.
+  never hardcoded — see the `plans` collection in `docs/DATABASE_SCHEMA.md`) — add:
+  unlimited likes, advanced filters, "see who liked you", profile boost,
+  incognito/invisible browsing, advanced compatibility features. **Implemented seed
+  pricing** (MVP placeholder, admin-editable — see `docs/DATABASE_SCHEMA.md`'s `plans`
+  section for how): CG Plus ₹299/month (unlimited likes, advanced filters), CG Pro
+  ₹599/month (adds see-who-liked-you, boost), CG Elite ₹999/month (adds incognito). Of
+  these five feature flags, only `unlimited_likes` is actually enforced anywhere in the
+  codebase so far (see above) — the rest are stored/served by `GET /api/plans` but have
+  no gated code path yet, same "documented scope boundary" pattern as other
+  not-yet-wired features elsewhere in this project (see `MOCK_FEATURES.md`).
 - Payments processed via Razorpay (India-first, UPI support); entitlement is always
-  validated server-side via webhooks, never trusted from the client.
+  validated server-side via webhooks, never trusted from the client. **Not yet true in
+  this pass:** Task #12 shipped a MOCK checkout (`POST /api/subscription/subscribe`
+  activates immediately, no real payment/webhook involved) — entitlement *checks* are
+  already fully server-side and DB-backed (`hasFeature()`, never a client claim), but
+  the *checkout* itself is not yet real Razorpay. See `MOCK_FEATURES.md`'s Razorpay
+  entry before this ships to real users.
 
 ## Growth Strategy
 

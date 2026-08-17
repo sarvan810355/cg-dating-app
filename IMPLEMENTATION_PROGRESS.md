@@ -10,6 +10,131 @@ next task that follows from it.
 
 ---
 
+## 2026-08-17 — Subscription scaffolding: Plans, mock checkout, entitlement checks (Task #12) implemented
+
+- **Phase:** Roughly Phase 10-equivalent scope in `docs/ROADMAP.md`'s
+  numbering (that doc doesn't yet have a dedicated Subscription phase
+  number distinct from Payments — see the internal TaskList's Task #12,
+  which is authoritative for this pass; `docs/ROADMAP.md` and the internal
+  numbering are deliberately not 1:1, per this project's established note).
+- **Task:** Subscription scaffolding (basic): configurable, admin-editable
+  Plan model (seeded idempotently at startup, not hardcoded — per
+  `docs/BUSINESS_PLAN.md`'s explicit requirement), a Subscription model,
+  `GET /api/plans` (public paywall listing), `GET /api/subscription/me`,
+  `POST /api/subscription/subscribe` (explicit MOCK checkout — no real
+  Razorpay), `POST /api/subscription/cancel` (stays valid until
+  `expiresAt`, standard SaaS behavior), and a server-side
+  `hasFeature()` entitlement helper that always reads from the database and
+  never trusts a client claim — demonstrated by gating the discovery feed's
+  free-tier daily like limit (20/day) behind the `unlimited_likes` feature.
+  Frontend: a Subscription/Upgrade page, a Membership status section (+
+  Cancel) on Settings, and an upgrade prompt on Discovery when the daily
+  limit is hit.
+- **Concurrency note — built alongside another background agent's Task #11
+  (Admin panel) in the SAME live working tree at the same time**, not
+  separate clones each pushing independently as the task's own launch
+  instructions anticipated (they described a `git pull --rebase`
+  reconciliation step; that didn't apply here because there was only ever
+  one working tree to begin with — both sessions' edits landed directly on
+  disk as they happened). This was discovered mid-task via a "file modified
+  since read" tool signal, not announced up front. Six files ended up
+  touched by both passes: `backend/models/User.js`, `backend/routes/
+  discovery.js`, `backend/server.js`, `frontend/src/App.jsx`, `frontend/src/
+  pages/Settings.jsx`, `frontend/src/api.js`. In every case both passes'
+  edits were structurally independent (different hunks in different parts
+  of the same file — verified by diffing), so nothing was actually
+  conflicting at the code level. To keep authorship cleanly separable in
+  git history despite the shared working tree, this pass's commit does NOT
+  `git add` the live (combined) version of those six files. Instead it
+  reconstructs a "this-task's-hunks-only" version of each (starting from
+  `git show HEAD:<path>`, re-applying only this pass's own edits — the
+  exact same edits already made to the live file, in the same order) and
+  stages that reconstructed blob directly via `git hash-object -w` +
+  `git update-index --cacheinfo`, leaving the actual working-tree file
+  (which still has both passes' combined edits) completely untouched on
+  disk so the other agent's session can keep working in it and commit its
+  own additions normally. Verified correct by diffing each reconstructed
+  file against the live working-tree file and confirming the *only*
+  remaining difference is the other agent's own (clearly Task #11-labeled,
+  in their own code comments) additions — see the diff output captured in
+  this session's transcript. All of this pass's fully-owned new files
+  (`backend/constants/subscriptionOptions.js`, `backend/models/Plan.js`,
+  `Subscription.js`, `backend/utils/entitlementUtils.js`,
+  `subscriptionSerializers.js`, `backend/routes/subscription.js`,
+  `frontend/src/pages/Subscription.jsx`) plus `frontend/src/pages/
+  Discovery.jsx` (confirmed untouched by the other pass) were `git add`ed
+  normally.
+- **Files touched:** see `PROJECT_STATE.md`'s "Last Modified Files" entry
+  for this pass for the complete, categorized list (new vs. additive
+  changes to shared files) — not repeated here to avoid the two documents
+  drifting out of sync on a list this long.
+- **Tests performed:**
+  - Backend: `node server.js` boots cleanly with every route group mounted
+    (including the concurrent Task #11 admin routes — no syntax/import
+    errors from either pass' files). Curled `GET /api/plans` (no auth
+    required — confirmed by the absence of a 401; it does 500 in this
+    sandbox, but confirmed via server logs to be a genuine ~10s Mongoose
+    buffering timeout from the unreachable MongoDB, not a route/wiring bug
+    — consistent with every prior pass' documented sandbox limitation) and
+    `GET /api/subscription/me` / `POST /api/subscription/subscribe` /
+    `POST /api/subscription/cancel` with no/bad auth, confirming `401` in
+    all three cases (plus a bogus-JWT case separately confirming "Invalid
+    or expired token").
+  - A standalone Node script (`/tmp/.../verify_entitlement.js`, deleted
+    before this commit per this project's established convention — never
+    commit a scratch verification script) loaded the ACTUAL
+    `backend/utils/entitlementUtils.js` with `Plan`/`Subscription`/`User`'s
+    Mongoose model modules swapped for tiny in-memory fakes via
+    `require.cache` injection (same "fake-model" spirit as prior passes'
+    integration scripts, applied here directly to a pure-logic utility
+    module rather than over HTTP, since `entitlementUtils.js` has no route
+    layer of its own). 15/15 checks passed:
+    - `seedDefaultPlans()`: first call creates all 3 default plans; a
+      second call creates none (idempotent) AND does not clobber a
+      simulated admin price edit made in between; all 3 plan codes present
+      with the expected `features` arrays.
+    - `hasFeature()`: `false` for a free-tier user; `true` for an ACTIVE
+      CG_PLUS subscriber's `unlimited_likes` (and correctly `false` for
+      that same user's `see_who_liked_you`, a CG_PRO-only feature — proving
+      the check is plan-specific, not "any active subscription grants
+      everything"); `true` for a CANCELLED-but-not-yet-`expiresAt`
+      subscriber (proving cancel doesn't immediately revoke access); `false`
+      for an EXPIRED-status subscriber; and `false` for that same
+      CANCELLED-but-valid subscriber once evaluated at a point in time
+      *after* their `expiresAt` actually passes (proving the check is
+      time-based, not merely status-based).
+    - `tryConsumeDailyLike()`: allows exactly the first 20 likes in a UTC
+      calendar day and blocks the 21st (without incrementing the stored
+      counter past 20); resets to a fresh count of 1 on the next UTC
+      calendar day; does NOT reset mid-way through the same UTC day (23:59
+      same-day check); and an `unlimited_likes` subscriber bypasses the
+      counter entirely, confirmed by checking their `dailyLikeCount` stayed
+      at 0 after a call that would otherwise have consumed quota.
+  - Frontend: `npm run build` succeeded; `npm run lint` (oxlint) passed with
+    the same two pre-existing `only-export-components` warnings carried
+    forward from every prior pass, no new warnings introduced by
+    `Subscription.jsx` or the `Settings.jsx`/`Discovery.jsx`/`api.js`
+    changes.
+- **Known limitation carried forward:** DB-touching behavior (actual
+  Plan/Subscription persistence, the `Plan.code` unique index and the
+  `Subscription` compound `(user, status, expiresAt)` index under real
+  concurrent inserts, the startup seed actually running against a real
+  database) could not be exercised end-to-end — same root cause
+  (unreachable MongoDB in this sandbox) as every prior pass; see
+  `PROJECT_STATE.md`'s Known Technical Debt.
+- **Next task:** Per the task's own launch instructions, whichever of Task
+  #9/#11 is still open, else Task #6 (Final polish). Task #9 (Verification)
+  was already complete before this pass started. Task #11 (Admin panel)
+  appeared complete or very nearly so by the time this pass finished (role
+  fields, admin routes, admin frontend pages, and a Settings link were all
+  observed live in the shared working tree) but this pass could not
+  directly confirm the other agent's session reached a finished, committed
+  state — whoever picks up next should verify that before assuming Task #6
+  is unblocked. See `PROJECT_STATE.md`'s "Next Exact Task"/"Next Recommended
+  Action" for the full reasoning.
+
+---
+
 ## 2026-08-17 — Safety: Report/Block + Safety Center (Task #10) implemented
 
 - **Phase:** Phase 8 — Safety (docs/ROADMAP.md numbering; internal TaskList

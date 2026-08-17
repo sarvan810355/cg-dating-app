@@ -46,7 +46,15 @@ async function request(path, { method = 'GET', body, auth = false } = {}) {
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    throw new Error(data.message || `Request failed with status ${res.status}`);
+    const err = new Error(data.message || `Request failed with status ${res.status}`);
+    // Attached so callers that need more than the message string (e.g. the
+    // Task #12 daily-like-limit 429's `upgradeRequired` flag, see
+    // frontend/src/pages/Discovery.jsx) don't have to regex-match error
+    // text — purely additive, existing `err.message`-only callers are
+    // unaffected.
+    err.status = res.status;
+    err.data = data;
+    throw err;
   }
 
   return data;
@@ -217,4 +225,29 @@ export function unblockUser(userId) {
 
 export function getBlockedUsers() {
   return request('/api/blocks', { method: 'GET', auth: true });
+}
+
+// --- Subscription (Task #12 in the internal TaskList — Subscription
+// scaffolding). POST /subscribe is a MOCK checkout — see
+// backend/routes/subscription.js's route-level comment and
+// MOCK_FEATURES.md; no real payment form is involved. --------------------
+
+export function getPlans() {
+  return request('/api/plans', { method: 'GET' });
+}
+
+export function getMySubscription() {
+  return request('/api/subscription/me', { method: 'GET', auth: true });
+}
+
+export function subscribeToPlan(planCode) {
+  return request('/api/subscription/subscribe', {
+    method: 'POST',
+    body: { planCode },
+    auth: true,
+  });
+}
+
+export function cancelSubscription() {
+  return request('/api/subscription/cancel', { method: 'POST', auth: true });
 }
