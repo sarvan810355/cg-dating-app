@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 
 const User = require('../models/User');
 const { requireAuth } = require('../middleware/auth');
+const { loginLimiter, signupLimiter } = require('../middleware/rateLimiters');
 
 const router = express.Router();
 
@@ -32,7 +33,7 @@ function toPublicUser(user) {
 }
 
 // POST /api/auth/signup
-router.post('/signup', async (req, res) => {
+router.post('/signup', signupLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
@@ -70,7 +71,7 @@ router.post('/signup', async (req, res) => {
 });
 
 // POST /api/auth/login
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
 
@@ -79,7 +80,10 @@ router.post('/login', async (req, res) => {
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    const user = await User.findOne({ email: normalizedEmail });
+    // password has `select: false` on the schema (security audit, Task #6) —
+    // explicitly opt back in here since this is the one route that needs to
+    // compare it.
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
     if (!user) {
       return res.status(401).json({ message: 'Invalid email or password' });
     }

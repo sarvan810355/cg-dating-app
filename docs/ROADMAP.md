@@ -2,7 +2,12 @@
 
 16-phase roadmap, condensed, reconciled with the MVP / V2 / V3 scope split used
 elsewhere in the docs (`TODO.md`, `PROJECT_STATE.md`). Status markers reflect the state
-as of 2026-08-17 and should be updated as phases progress.
+as of 2026-08-18 (Task #6 — final polish/security audit/docs, the last of the 12
+internal tasks that made up the MVP build) and should be updated as phases progress.
+**The MVP (Phases 0-10) is complete.** Phases 13-15 (Testing, full Security Hardening,
+Deployment) remain cross-cutting work not yet started — see `TODO.md`'s "Before real
+production launch" section for the concrete gap list. This project is explicitly
+**not production-ready** as-is.
 
 | Phase | Name | Scope tier | Status | Summary |
 |---|---|---|---|---|
@@ -16,12 +21,13 @@ as of 2026-08-17 and should be updated as phases progress.
 | 7 | Verification | MVP | **Complete (MVP subset; MOCK SMS delivery, manual photo review)** | Mobile OTP verification (`backend/routes/verification.js`, hashed OTP + 10-min expiry + rate limiting, MOCK console-logged/dev-only-response SMS delivery — see `MOCK_FEATURES.md`), photo/selfie verification (submission -> `PENDING`, manual-review queue for the future Admin panel, no automated face-match), verification badges (`mobileVerified`/`photoVerified` booleans on public profile/discovery/match views, `VerificationBadge` component + a dedicated Verification screen) implemented. |
 | 8 | Safety (Report/Block/Safety Center) | MVP | **Complete** | Report flow (`POST /api/reports`, reason enum + optional details/evidence), Block flow (`POST`/`DELETE`/`GET /api/blocks`, bidirectional exclusion enforced in discovery/matches/messaging/Socket.IO), Report/Block entry points on Discovery cards + Chat, Blocked Users management screen, and a static Safety Center screen implemented. No automated abuse detection — purely manual, reviewed by the Admin moderation queue (Phase 9, now complete); see `MOCK_FEATURES.md`. |
 | 9 | Admin Panel (basic) | MVP | **Complete** | Role field (`USER`/`SUPER_ADMIN`/`ADMIN`/`MODERATOR` — divergence: no `SUPPORT`/`ANALYST`, see `docs/DATABASE_SCHEMA.md`) + role-gated `/admin` routes (`backend/routes/admin.js`, `frontend/src/components/AdminRoute.jsx`), reports queue, photo-verification review queue, suspend/reinstate (no permanent ban in this basic pass), and audit logging (`backend/models/AuditLog.js`) implemented. No self-serve "become admin" flow — the first `SUPER_ADMIN` must be promoted directly in the database, see `SETUP.md`. |
-| 10 | Subscription (basic) | MVP | Not Started | Configurable plans (CG_PLUS/CG_PRO/CG_ELITE), paywall UI, server-side entitlement checks; Razorpay integration may ship mocked initially (see `MOCK_FEATURES.md`). |
+| 10 | Subscription (basic) | MVP | **Complete** | Configurable plans (CG_PLUS/CG_PRO/CG_ELITE, DB-backed/admin-editable), paywall UI, server-side entitlement checks (`hasFeature()`, demonstrated on the free-tier daily like limit) implemented; Razorpay integration ships MOCK (immediate activation, no real payment/webhook — see `MOCK_FEATURES.md`, explicitly **not production-ready as-is**). |
+| — | Final Polish / Security Audit / Documentation (Task #6) | Cross-cutting (MVP wrap-up) | **Complete** | Full build/lint/boot verification pass; security audit against `docs/ARCHITECTURE.md`'s requirements (two real gaps fixed — auth rate limiting, a `User.password` defense-in-depth hardening — one larger gap tracked as BUG-001, see `docs/SECURITY_AUDIT.md`); UI consistency spot-check (found already-solid, no changes needed); every tracking doc finalized to reflect true MVP-complete state. This closes out the MVP build — see `PROJECT_STATE.md`. |
 | 11 | AI Features | V2 | Not Started | Claude API integration (backend-only): Why-You-Match, Smart Icebreakers, Profile Coach, Date Ideas — with caching/rate-limits/token-limits/usage tracking. |
 | 12 | Growth & Engagement Features | V2 | Not Started | Safe Date mode, Date Planner, Private/Invisible browsing, advanced filters, Profile Boost, Priority Like, Referral program, real Razorpay integration. |
-| 13 | Testing & QA | Cross-cutting | Not Started | Unit, integration, UI, security, and regression test suites (see `docs/TESTING_STRATEGY.md`); `npm test` to be implemented here. |
-| 14 | Security Hardening | Cross-cutting | Not Started | Full pass on the security requirements list (rate limiting, input validation everywhere, secure uploads, audit logging, secret hygiene) ahead of any public launch. |
-| 15 | Deployment | Cross-cutting | Not Started | Backend on Render/Railway, MongoDB Atlas, frontend on Vercel/Netlify, Cloudinary wired for production, environment/secrets configured per provider. |
+| 13 | Testing & QA | Cross-cutting | Not Started | Unit, integration, UI, security, and regression test suites (see `docs/TESTING_STRATEGY.md`); `npm test` to be implemented here. Every test performed across the MVP build so far has been a manual/throwaway verification script (see `IMPLEMENTATION_PROGRESS.md`), never committed as reusable regression coverage. |
+| 14 | Security Hardening | Cross-cutting | Not Started | Task #6 performed a security *audit* (see above) and fixed what was safely fixable in a polish pass, but the full hardening build-out — `helmet`/security-headers middleware, rate limiting beyond auth, a systematic input-validation layer — remains open, tracked as BUG-001 (see `BUGS.md`). |
+| 15 | Deployment | Cross-cutting | Not Started | Backend on Render/Railway, MongoDB Atlas, frontend on Vercel/Netlify, Cloudinary wired for production, environment/secrets configured per provider. Also blocked on: a live MongoDB connection has never been verified in any sandbox across this entire project — see `TODO.md`'s "Before real production launch" section. |
 | 16 | Final Audit / V3 Expansion | V3 | Not Started | CG Connect (events), advanced Trust Engine, ML-based recommendations, advanced analytics, statewide/national expansion, city SEO pages at scale, Capacitor native wrapper. |
 
 ## Notes on sequencing
@@ -36,4 +42,10 @@ as of 2026-08-17 and should be updated as phases progress.
   phases for roadmap clarity, but individual tests/security checks should be added
   incrementally as each feature phase lands, not deferred entirely to the end.
 - Phase 11–12 (V2) and Phase 16 (V3) should not start until the MVP (Phases 1–10) is
-  shipped and working end-to-end, per the project's own MVP-first priority.
+  shipped and working end-to-end, per the project's own MVP-first priority. **Update
+  as of Task #6:** the MVP is now fully *built* (Phases 0-10 complete, code-reviewed,
+  and builds/boots cleanly), but "working end-to-end" in the fullest sense still means
+  verified against a live database, which has never happened in any sandbox across
+  this project's history — see `TODO.md`'s "Before real production launch" section.
+  V2/V3 work should wait until that verification happens on a real environment, not
+  just until the MVP code exists.

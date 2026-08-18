@@ -16,6 +16,14 @@ const UserSchema = new mongoose.Schema(
     password: {
       type: String,
       required: true,
+      // Security audit (Task #6, final polish pass): never returned by a bare
+      // `find`/`findOne` — the one route that needs the hash (login, to run
+      // bcrypt.compare) explicitly opts back in via `.select('+password')`.
+      // Every route that returns a user already builds a hand-picked public
+      // object (see routes/auth.js's toPublicUser()) rather than serializing
+      // the raw document, so this is defense-in-depth, not a fix for an
+      // active leak.
+      select: false,
     },
     phone: {
       type: String,

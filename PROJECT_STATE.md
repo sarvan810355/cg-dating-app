@@ -1,20 +1,175 @@
 Project: CG-Dating-App
-Current Phase: Phase 9 (Admin Panel, this pass) and Phase 10-equivalent (Subscription scaffolding, the concurrent Task #12 pass, commit 9319600) are both now complete — MVP Phases 1-10 are all done except the cross-cutting Phase 13/14 (Testing/Security Hardening) work
-Current Task: Task #11 in the internal TaskList — Admin Panel (basic): role field (+ accountStatus) on User, role-gated /api/admin/* routes (dashboard counts, reports moderation queue, photo-verification review queue, suspend/reinstate, SUPER_ADMIN-only role change), an AuditLog model + write-on-every-mutation helper, and a matching role-gated /admin frontend section (dashboard stat grid, reports queue, photo-verification queue, basic user search/suspend/reinstate) invisible in the nav to non-admin users. **Concurrency note (confirming/closing out the note left by the Task #12 pass's own PROJECT_STATE.md entry, since that pass ran at the same time as this one and could only speculate about this task's completion state):** this task ran in the same live working tree as Task #12 (Subscription scaffolding) at the same time — not two separate clones needing a later `git pull --rebase` as the launch instructions anticipated, but one shared sandbox filesystem with two agent sessions editing concurrently. For the files both passes touched (`backend/models/User.js`, `backend/routes/discovery.js`, `backend/server.js`, `frontend/src/App.jsx`, `frontend/src/api.js`, `frontend/src/pages/Settings.jsx`, plus `docs/DATABASE_SCHEMA.md`/`TODO.md`), Task #12 committed first (commit 9319600, using its own hunk-isolation technique — `git hash-object`/`git update-index --cacheinfo` to stage only its own edits per shared file); this task's commit (the one this entry describes) then simply diffed its own working tree against that new HEAD and confirmed the *only* remaining difference on every shared file was this task's own additions (verified explicitly — see "Last Successful Test" below) before running a normal `git add`/`git commit` on top — no reconstruction needed on this side since Task #12 had already landed cleanly. **This closes the loop: Task #11 (this entry) is now confirmed complete, resolving the "verify #11 actually landed" note in Task #12's own "Next Exact Task" line.**
-Completed Features: Project scaffold (Express backend, React/Vite/Tailwind frontend, Mongoose placeholder models, README, .gitignore) — commit fd72a17; Authentication (signup/login/JWT, protected /me) — commit 3f440ca; Profile system (model, CRUD API, completion score, multi-step profile builder UI) — commit 00c29f3; Discovery + Matching (Like/Match models, discovery feed with pagination + basic filters, swipe API with mutual-match detection, matches list, discovery/match UI) — commit f86267a; Chat (Message model, GET/POST/PATCH /api/matches/:matchId/messages, Socket.IO real-time layer with JWT handshake auth reusing the shared verifyToken() helper, typing indicator, read receipts, real chat UI replacing ChatComingSoon.jsx) — commit f027d73; Notifications (Notification model, GET/PATCH/PUT /api/notifications* routes, match/like/message notification creation with per-type preference gating, live notification:new Socket.IO event via a per-user room, bell/badge + dropdown notification center, minimal Settings page for preference toggles) — commit cc7fb76; Verification (mobileVerification/photoVerification sub-documents on User, POST /api/verification/mobile/request-otp + /verify-otp with hashed+expiring+rate-limited OTPs and MOCK/DEV-ONLY SMS delivery, POST /api/verification/photo/submit -> PENDING manual-review record reusing the existing mock photo-storage pattern, GET /api/verification/status, mobileVerified/photoVerified badges surfaced on public profile/discovery/match views, a Verification screen + reusable VerificationBadge component on the frontend) — commit 0d724fe; Safety (Report model + POST /api/reports with a 9-value reason enum + optional details/evidence, Block model + POST/DELETE/GET /api/blocks with idempotent create + unique-index dedup, bidirectional blocking exclusion enforced identically across the discovery feed, matches list, message REST routes, and Socket.IO match:join via a shared backend/utils/blockUtils.js, a Report/Block entry-point menu reachable from Discovery cards and Chat, a Blocked Users management screen, and a static Safety Center screen) — commit 2ab2aca; Subscription scaffolding (Task #12 — Plan/Subscription models, GET /api/plans, GET/POST /api/subscription/*, a real server-side hasFeature() entitlement check demonstrated on a free-tier daily-like limit, Subscription/Upgrade page — MOCK checkout, no real Razorpay yet) — commit 9319600; Admin Panel, basic (Task #11, this pass — see below) — see this entry's commit
-Features In Progress: None currently in flight
-Remaining Features: AI features, Safe Date, Events, Analytics, Security hardening, Testing, Deployment. Also still deferred within already-started phases: a persisted `preferences` collection (age range/distance filters), unmatch, "who liked you" reveal screen, image/voice chat messages (V2), matches-list last-message preview/unread badge, real FCM push notification delivery, real SMS/OTP provider delivery, a real Razorpay integration (Subscription's `POST /api/subscription/subscribe` is still a MOCK checkout — see MOCK_FEATURES.md), report evidence file upload, and any automated spam/scam/abuse detection ("Trust Engine", V3). New from this pass: there is no `GET /api/admin/audit-logs` route yet (AuditLog entries are written on every admin mutation but nothing reads them back via the API — see this pass's Known Technical Debt); no permanent ban/account-deletion flow (suspend/reinstate only, reversible); `SUPPORT`/`ANALYST` roles from the original draft enum were deliberately not implemented (no route needs them yet).
-Known Bugs: None recorded yet — see BUGS.md
-Known Technical Debt: MongoDB connection is still not verified against a live database in this sandbox (no mongod/Docker/network access to MongoDB binaries available here) — this remains the top technical-debt item blocking real end-to-end testing of every index in this project, now including the new `User.role` index and `AuditLog.createdAt` index from this pass; `users.phone` is not unique-indexed; Cloudinary/Firebase/Razorpay/Claude API integrations not yet configured — see MOCK_FEATURES.md; photo storage is still MOCK/TEMPORARY (base64/URL, no Cloudinary) — this pass's admin photo-verification review queue reviews exactly this same mock-stored photo, it doesn't change that storage; discovery has no geo/distance filtering yet; chat is text-only; SMS/OTP delivery is MOCK/DEV-ONLY; report evidence is plain strings only, no file upload; no automated spam/scam/abuse detection anywhere (manual moderation only — this pass is precisely what makes that manual moderation actually actionable, closing the gap every prior Report/Verification pass left open); Subscription's `POST /api/subscription/subscribe` is a MOCK checkout (see the Task #12 entry in git history). **New in this pass (Task #11):** there is no `GET /api/admin/audit-logs` API route — `AuditLog` documents are written correctly on every admin mutation (verified — see below) but nothing reads them back yet, so an admin currently has to query the database directly to see the audit trail; `GET /api/admin/users` (the search/list route backing suspend/reinstate) is not paginated beyond a basic `page`/`limit`, and has no filters beyond a case-insensitive partial email match (no filter by role/accountStatus yet); role/accountStatus changes take effect on the affected user's *next* request (both are re-read from the database on every `/api/admin/*` request and by `POST /api/auth/login`) but an already-issued JWT for a since-suspended user remains valid for non-suspension-gated routes until it expires (7 days) — this is why discovery also excludes suspended users defense-in-depth, but e.g. a suspended user's existing Socket.IO connection or an in-flight chat isn't forcibly torn down; the `role`/`accountStatus` fields' real behavior against a live database (e.g. confirming the new `role` index) is unverified for the same MongoDB-unreachable-in-sandbox reason as everything else in this list.
-Last Successful Test (Task #11, this pass — earlier passes' test summaries are preserved in git history/IMPLEMENTATION_PROGRESS.md rather than accumulated here): Backend server boots cleanly (all route groups including the concurrently-landed Task #12 subscription routes, no syntax/import errors) — confirmed against the working tree both before and after Task #12's commit (9319600) landed, and confirmed via `git diff HEAD -- <the 6 shared files>` that after that commit, this pass's working tree differs from the new HEAD *only* by this pass's own additions (no leftover Task #12 content silently along for the ride, no accidental clobbering of Task #12's content either). A standalone Node script (no live DB, same fake-in-memory-models-over-real-HTTP-via-require.cache pattern used by every DB-touching test in this project so far) mounted the ACTUAL `backend/routes/admin.js`, `auth.js`, and `discovery.js` files on a real Express app + real HTTP server (only the Mongoose model modules — User/Profile/Match/Message/Report/AuditLog/Like/Block — swapped for tiny in-memory fakes) and drove it over real HTTP with real signed JWTs for five seeded users (USER/MODERATOR/ADMIN/SUPER_ADMIN roles, plus one SUSPENDED user): 64/64 checks passed, covering (1) every `/api/admin/*` route returning `401` with no auth and `403` for a plain `USER`; (2) role-tier enforcement — `MODERATOR` can reach the dashboard/reports-queue/verifications-queue but is `403`'d on suspend/reinstate/role-change/user-list (the tighter `ADMIN`+ tier), `ADMIN` can suspend/reinstate/list-users but is `403`'d on role-change (`SUPER_ADMIN`-only), confirming ADMIN/MODERATOR can never escalate anyone's privileges including their own; (3) `GET /api/admin/dashboard`'s counts matching the seeded fake data exactly; (4) `PATCH /api/admin/reports/:id` transitioning status, stamping `reviewedAt`/`reviewedBy` from the acting admin, rejecting a `status: 'PENDING'` attempt, and writing a `report.reviewed` AuditLog entry with the correct actor; (5) `PATCH /api/admin/verifications/photo/:userId` approving/rejecting, stamping `verifiedAt`/`reviewedAt`/`reviewedBy`, and writing a `verification.approved`/`.rejected` AuditLog entry; (6) suspend (`400` on a self-suspend attempt) + reinstate + a `user.suspended`/`user.reinstated` AuditLog entry each; (7) `SUPER_ADMIN`-only role change (`400` on an invalid role value) + a `user.role_changed` AuditLog entry capturing `oldRole`/`newRole`; (8) `GET /api/admin/users?email=` finding a user by partial, case-insensitive email match; (9) **`POST /api/auth/login` blocking a `SUSPENDED` account with correct credentials (`403`, clear message) while a *wrong* password on that same suspended account still returns the generic `401` (no status-leak via a different error), an `ACTIVE` account logging in normally (`200`) with `role` now present on the response, and `GET /api/auth/me` also returning `role`**; (10) **the discovery feed excluding a suspended user's profile from another user's candidate list.** This script (and a second, simpler curl-equivalent script that booted the REAL `server.js` in-process to confirm the actual `app.use('/api/admin', adminRouter)` wiring specifically — this caught a real bug during development, see "Design decisions" in IMPLEMENTATION_PROGRESS.md) were both deleted before this commit per the project's established "verify with throwaway scripts, never commit them" convention. Frontend `npm run build` and `npm run lint` both pass with the new AdminDashboard/AdminReports/AdminVerifications/AdminUsers pages, AdminNav/AdminRoute components, and the api.js/App.jsx/Settings.jsx wiring — re-run again after Task #12's commit landed to confirm nothing broke (same two pre-existing oxlint only-export-components warnings carried forward, no new warnings). DB-touching behavior (actual persistence/index behavior against a real MongoDB) could not be exercised end-to-end — see Known Technical Debt.
-Last Modified Files (Task #11, this pass — see git log for the exact commit; earlier passes' file lists are preserved in git history/IMPLEMENTATION_PROGRESS.md rather than accumulated here): backend/constants/adminOptions.js (new — USER_ROLES/ADMIN_ROLES/SUSPEND_ROLES/ACCOUNT_STATUSES), backend/middleware/adminAuth.js (new — requireRole(...), runs after requireAuth, no JWT-verification duplication), backend/models/AuditLog.js (new), backend/utils/auditUtils.js (new — writeAuditLog()), backend/routes/admin.js (new — GET /dashboard, GET/PATCH /reports*, GET/PATCH /verifications/photo*, GET /users, PATCH /users/:userId/suspend|reinstate|role), backend/models/User.js (additive: role/accountStatus fields + a role index), backend/routes/auth.js (additive: role now in toPublicUser(), login blocks a SUSPENDED account with 403 after the password check), backend/routes/discovery.js (additive: feed excludes SUSPENDED users), backend/server.js (additive: mounts /api/admin), frontend/src/components/AdminRoute.jsx (new — role-gated route guard extending ProtectedRoute.jsx's pattern), frontend/src/components/AdminNav.jsx (new — shared tab strip across the four admin pages), frontend/src/pages/AdminDashboard.jsx, AdminReports.jsx, AdminVerifications.jsx, AdminUsers.jsx (all new), frontend/src/api.js (additive: 8 new admin calls), frontend/src/App.jsx (additive: /admin, /admin/reports, /admin/verifications, /admin/users routes), frontend/src/pages/Settings.jsx (additive: role-conditional "Admin" link, invisible to non-admins), docs/DATABASE_SCHEMA.md, docs/API_DOCUMENTATION.md, docs/ROADMAP.md, MOCK_FEATURES.md, SETUP.md (new "Creating the first admin account" section), TODO.md (see git log for the latest).
-Database Status: MongoDB/Mongoose schemas implemented for User, Profile, Like, Match, Message, Notification, Block, Report, Plan, Subscription, and now AuditLog; no live DB connection has ever been verified in any sandbox session so far — this remains the top technical-debt item blocking real end-to-end testing
-Backend Status: Express + Socket.IO server (same HTTP server) running with auth + profile + discovery + matches + notifications + verification + reports + blocks + subscription + admin routes; all routes from every prior pass unchanged, plus GET /api/admin/dashboard, GET/PATCH /api/admin/reports*, GET/PATCH /api/admin/verifications/photo*, GET /api/admin/users, PATCH /api/admin/users/:userId/suspend|reinstate|role — every one auth + role-gated (MODERATOR+ for the queues/dashboard, ADMIN+ for suspend/reinstate/user-list, SUPER_ADMIN-only for role change); POST /api/auth/login now 403s a SUSPENDED account after password verification; GET /api/discovery/feed now also excludes SUSPENDED users
-Frontend Status: All screens from every prior pass unchanged, plus a role-gated /admin section (Dashboard stat grid, Reports queue with mark-reviewed/action-taken/dismissed + optional note, Photo Verification queue with the submitted selfie + approve/reject, basic Users search-by-email + suspend/reinstate) reachable only via a role-conditional "Admin" link on Settings for ADMIN/SUPER_ADMIN/MODERATOR accounts — invisible in the UI, and redirect-guarded by AdminRoute.jsx, for everyone else; design-system color tokens wired into Tailwind v4 via frontend/src/index.css; reusable components unchanged from prior passes plus AdminNav/AdminRoute
-Authentication Status: Implemented (signup/login/JWT/me endpoint); login now also enforces account suspension (this pass) — unchanged otherwise
-AI Status: Not started (planned: Claude API, backend-only)
-Payment Status: Subscription scaffolding implemented (Task #12) — see git history for that pass's own entry; MOCK checkout, not real Razorpay yet
-Admin Status: Implemented, basic (Task #11, this pass) — role/accountStatus on User, role-gated /api/admin/* routes (dashboard, reports queue, photo-verification queue, suspend/reinstate, SUPER_ADMIN-only role change), AuditLog on every mutation, and a matching role-gated /admin frontend section. No self-serve "become admin" flow (intentional, security-sensitive) — see SETUP.md's "Creating the first admin account" section for the one-time manual database command a real deployment needs.
-Deployment Status: Not started (planned: Render/Railway + MongoDB Atlas + Vercel/Netlify + Cloudinary)
-Next Exact Task: Task #6 — Final polish (per the task-launch instructions' explicit guidance for this task: Task #11, the last of #9/#11/#12 blocking #6 to be confirmed, is now complete — #9 and #12 were already done, and this entry closes out #11). This sandbox session does not have a TaskList tool available to cross-check the internal task graph directly (ToolSearch found none here either) — whoever picks this up next should still confirm against TaskList if it's available to them. Scope per TODO.md's "Cross-cutting MVP work" section: security hardening pass, input validation audit across all endpoints, consistent error-response format, a basic automated test suite, and general polish — see docs/ARCHITECTURE.md and docs/TESTING_STRATEGY.md.
-Next Recommended Action: Start Task #6 (Final polish) per the scope above. Worth folding in: a `GET /api/admin/audit-logs` route (the model/index already exist, nothing reads them back yet — see this pass's Known Technical Debt), a real Razorpay integration (Task #12's biggest gap), and — unchanged from every prior pass — get a real MongoDB connection verified in whatever environment will run this next (still blocked in every sandbox session so far) so the growing pile of DB-dependent behavior (Notifications' real persistence, Verification's select:false fields, Block's unique index, Admin's role-gating and new indexes, Plan/Subscription's indexes and seeding) can finally be exercised end-to-end instead of only via server-boot + pure-logic + fake-model-over-real-HTTP checks.
+Current Phase: MVP (Phases 0-10 per docs/ROADMAP.md) is **complete**. Task #6 (Final
+polish, security audit, documentation wrap-up — this pass) closes out the last of the
+12 internal tasks that made up the MVP build. Phases 13/14/15 (Testing, full Security
+Hardening, Deployment) remain cross-cutting work not yet started — see "Remaining
+Features" below and docs/ROADMAP.md.
+Current Task: Task #6 — Final polish, security/performance audit, documentation
+wrap-up (this pass, the last of the MVP build). Scope actually covered: (1) full
+build/lint/boot verification pass across frontend and backend; (2) a security audit
+against docs/ARCHITECTURE.md's security requirements and docs/TESTING_STRATEGY.md's
+security checklist, with two real findings fixed directly (see below) and one larger
+gap formally tracked as BUG-001 rather than half-fixed; (3) a light UI consistency
+spot-check across Discovery/Matches/Chat/Notifications/Admin (found already-solid —
+every screen already has loading/error/empty states via a single shared `api.js`
+request() helper, and dark-mode tokens are already wired consistently — no changes
+needed there); (4) this full documentation wrap-up pass (PROJECT_STATE.md,
+IMPLEMENTATION_PROGRESS.md, TODO.md, MOCK_FEATURES.md, README.md, docs/ROADMAP.md,
+BUGS.md, and the new docs/SECURITY_AUDIT.md).
+Completed Features: Project scaffold (Express backend, React/Vite/Tailwind frontend,
+Mongoose placeholder models, README, .gitignore) — commit fd72a17; Authentication
+(signup/login/JWT, protected /me) — commit 3f440ca; Profile system (model, CRUD API,
+completion score, multi-step profile builder UI) — commit 00c29f3; Discovery +
+Matching (Like/Match models, discovery feed with pagination + basic filters, swipe API
+with mutual-match detection, matches list, discovery/match UI) — commit f86267a; Chat
+(Message model, GET/POST/PATCH /api/matches/:matchId/messages, Socket.IO real-time
+layer with JWT handshake auth, typing indicator, read receipts, real chat UI) — commit
+f027d73; Notifications (Notification model, GET/PATCH/PUT /api/notifications* routes,
+match/like/message notification creation with per-type preference gating, live
+notification:new Socket.IO event, bell/badge + dropdown notification center, Settings
+preference toggles) — commit cc7fb76; Verification (mobile OTP + photo verification
+sub-documents/routes, MOCK/DEV-ONLY SMS delivery, verification badges) — commit
+0d724fe; Safety (Report + Block models/routes, bidirectional block exclusion across
+discovery/matches/messages/sockets, Safety Center) — commit 2ab2aca; Subscription
+scaffolding (Plan/Subscription models, GET /api/plans, GET/POST /api/subscription/*,
+server-side hasFeature() entitlement check, MOCK checkout) — commit 9319600; Admin
+Panel (role/accountStatus on User, role-gated /api/admin/* routes, AuditLog on every
+mutation, role-gated /admin frontend section) — commit 093d0bc; **Final polish,
+security audit, and documentation wrap-up (Task #6, this pass)** — see this entry's
+own commit: `User.password` now `select: false` (with `POST /api/auth/login` updated
+to `.select('+password')` explicitly) as a defense-in-depth hardening (no active leak
+existed — every route already built hand-picked response objects, verified by
+spot-checking every serializer in the codebase); rate limiting added to `POST
+/api/auth/login` (20/15min/IP) and `POST /api/auth/signup` (10/hour/IP) via
+`backend/middleware/rateLimiters.js` (`express-rate-limit`) — previously *zero* rate
+limiting existed on either endpoint; `bcrypt` upgraded `5.1.1` → `6.0.0`, closing a
+critical transitive `npm audit` finding in `node-tar` (`backend/`'s `npm audit` now
+reports 0 vulnerabilities); new `docs/SECURITY_AUDIT.md` documenting the full audit;
+BUG-001 (P1) filed for the larger, deliberately-not-attempted-here remaining gap
+(no rate limiting beyond auth, no `helmet`/security-headers middleware — real Phase 14
+scope). See docs/SECURITY_AUDIT.md for the complete audit writeup.
+Features In Progress: None — the MVP (Phases 0-10) is complete. Next work is either V2
+feature scope or the cross-cutting Phases 13-15 (Testing, full Security Hardening,
+Deployment) — see "Next Exact Task" below.
+Remaining Features (all deliberately out of MVP scope, not gaps in this pass): AI
+features (Why-You-Match, Smart Icebreakers, Profile Coach, Date Ideas — V2, Claude API),
+Safe Date mode, Date Planner, Private/Invisible browsing, advanced filters, Profile
+Boost, Priority Like, Referral program, real Razorpay integration, voice/video calling
+(all V2); CG Connect/Events, advanced Trust Engine, ML recommendations, advanced admin
+analytics, statewide/national expansion, city-scale SEO pages, Capacitor native wrapper
+(all V3). Also still deferred within already-shipped MVP features (unchanged from
+before this pass, see TODO.md for the full list): a persisted `preferences` collection
+(age range/distance filters), unmatch, "who liked you" reveal screen, image/voice chat
+messages, matches-list last-message preview/unread badge, real FCM push delivery, real
+SMS/OTP provider delivery, real Razorpay integration, report evidence file upload,
+automated spam/scam/abuse detection ("Trust Engine"), `GET /api/admin/audit-logs` (the
+model/index exist, nothing reads them back yet), permanent ban/account-deletion (suspend/
+reinstate only, reversible).
+Known Bugs: BUG-001 (P1) — no rate limiting beyond login/signup, no security-headers
+middleware; see BUGS.md and docs/SECURITY_AUDIT.md. No other bugs found in this pass's
+audit/consistency check.
+Known Technical Debt: MongoDB connection has **never** been verified against a live
+database in any sandbox session across this entire project (no mongod/Docker/network
+access to MongoDB binaries available in any of these sandboxes) — this remains the
+single largest item blocking real end-to-end verification of every index, every
+`select: false` field, every unique constraint (Block's compound unique index,
+Match's canonical-pair unique index, User.email's unique index) in this codebase; see
+"Before real production launch" in TODO.md. `users.phone` is still not unique-indexed.
+Cloudinary/Firebase/Razorpay/Claude API integrations remain unconfigured — see
+MOCK_FEATURES.md for the complete, consolidated list (photo storage, SMS/OTP delivery,
+FCM push, Razorpay checkout are all MOCK/TEMPORARY). Discovery has no geo/distance
+filtering yet. Chat is text-only. Report evidence is plain strings, no file upload. No
+automated test suite exists in either backend/ or frontend/ (see
+docs/TESTING_STRATEGY.md). BUG-001 (rate limiting/security headers beyond auth) is
+newly tracked in this pass — see above.
+Last Successful Test (Task #6, this pass): Frontend — `npm install` (no changes),
+`npm run build` (clean, `dist/index.html` + JS/CSS chunks produced, no errors),
+`npm run lint` (oxlint — 0 errors, the same 2 pre-existing `only-export-components`
+warnings on AuthContext.jsx/NotificationContext.jsx carried forward from every prior
+pass, no new warnings). Backend — `npm install` (bcrypt bumped to 6.0.0,
+express-rate-limit added; `npm audit` now 0 vulnerabilities, was 3 [2 high, 1
+critical] before this pass), `node -e "require('./server.js')"` boots cleanly and logs
+"CG Dating backend listening on port 5000" with no syntax/import errors, `GET
+/api/health` returns 200 `{"status":"ok","service":"cg-dating-app-backend"}`, server
+process cleanly killable (no lingering port). Security fixes verified without a live
+DB per this project's established convention: (1) a standalone script mounted a fake
+in-memory `User` model (respecting `select`/`select('+password')` semantics) under the
+REAL `backend/routes/auth.js` over real HTTP — signup, login (correct password, 200),
+login (wrong password, 401), and `GET /api/auth/me` (200) all verified to never
+include a `password` key in any response, and `role` still present on `/me`; (2) a
+second standalone script mounted the real `loginLimiter` middleware on a minimal
+Express app (no DB dependency) and sent 25 requests — the first 20 returned 200, the
+remaining 5 returned 429, exactly as configured; (3) `bcrypt.hash`/`.compare`/
+`.hashSync`/`.compareSync` round-tripped correctly post-upgrade via a standalone
+script. Both scripts deleted before commit per this project's established "verify with
+throwaway scripts, never commit them" convention. Security/consistency audit itself:
+grepped the full codebase for hardcoded secrets (none found outside `.env.example`
+placeholders), confirmed `backend/.env`/`frontend/.env` have never been committed
+(`git log --all --full-history` empty for both), spot-checked every route file for
+`requireAuth`/`requireRole` coverage (complete), spot-checked every response
+serializer for raw-document leakage (none found), spot-checked regex-construction
+sites for injection safety (both escape input correctly), spot-checked `:id` route
+params for ObjectId validation (consistently present). Frontend consistency
+spot-check: dark-mode/design-token usage confirmed consistent (no hardcoded hex colors
+found outside `index.css`'s token definitions across any `.jsx` file), loading/error/
+empty states confirmed present on Discovery, Matches, Chat, NotificationBell, and all
+four Admin screens (all funnel through `frontend/src/api.js`'s single `request()`
+helper, which attaches `.status`/`.data` to thrown errors consistently) — no changes
+needed.
+Last Modified Files (Task #6, this pass): backend/models/User.js (password field now
+`select: false`), backend/routes/auth.js (login route: `.select('+password')`; both
+signup/login routes: rate limiter middleware applied), backend/middleware/
+rateLimiters.js (new — loginLimiter/signupLimiter), backend/package.json /
+package-lock.json (bcrypt 5.1.1 → 6.0.0, express-rate-limit added), docs/
+SECURITY_AUDIT.md (new), BUGS.md (BUG-001 added), PROJECT_STATE.md (this file),
+IMPLEMENTATION_PROGRESS.md, TODO.md, MOCK_FEATURES.md, README.md, docs/ROADMAP.md (all
+updated to reflect final MVP-complete state — see git log for the exact diff).
+Database Status: MongoDB/Mongoose schemas implemented for User, Profile, Like, Match,
+Message, Notification, Block, Report, Plan, Subscription, and AuditLog; no live DB
+connection has ever been verified in any sandbox session across this entire project —
+this remains the top technical-debt item (see "Known Technical Debt" and TODO.md's
+"Before real production launch" section).
+Backend Status: Express + Socket.IO server (same HTTP server) running with auth +
+profile + discovery + matches + notifications + verification + reports + blocks +
+subscription + admin routes — all from prior passes, unchanged in behavior this pass
+except: `POST /api/auth/login`/`signup` now rate limited, `User.password` now
+`select: false`. Boots cleanly; `GET /api/health` confirmed live.
+Frontend Status: All screens from every prior pass unchanged this pass (consistency
+spot-check found nothing requiring a fix — dark mode tokens and loading/error/empty
+states already solid throughout). `npm run build`/`npm run lint` both clean.
+Authentication Status: Implemented (signup/login/JWT/me endpoint), now with rate
+limiting on both signup and login and the password hash never selected by default —
+unchanged otherwise.
+AI Status: Not started (planned: Claude API, backend-only — V2 scope, see
+docs/ROADMAP.md Phase 11).
+Payment Status: Subscription scaffolding implemented — MOCK checkout, not real
+Razorpay yet (unchanged this pass; still explicitly not production-ready as-is, see
+MOCK_FEATURES.md).
+Admin Status: Implemented — role/accountStatus on User, role-gated /api/admin/* routes
+(dashboard, reports queue, photo-verification queue, suspend/reinstate, SUPER_ADMIN-only
+role change), AuditLog on every mutation, role-gated /admin frontend section (unchanged
+this pass).
+Deployment Status: Not started (planned: Render/Railway + MongoDB Atlas +
+Vercel/Netlify + Cloudinary — Phase 15, cross-cutting, not yet started).
+Next Exact Task: **The MVP (Phases 0-10) is genuinely complete and buildable
+end-to-end, modulo the standing untested-live-database caveat.** This project is
+explicitly **not production-ready** as-is — see TODO.md's "Before real production
+launch" section for the concrete list (live MongoDB Atlas connection + testing, real
+Cloudinary/Firebase/Razorpay/SMS provider credentials, real `.env` production secrets,
+a seeded real `SUPER_ADMIN` account, an automated test suite per
+docs/TESTING_STRATEGY.md, a unique index on `User.phone`, HTTPS/hosting setup per
+docs/ARCHITECTURE.md's Phase 15, and closing BUG-001). The next phase of work, once
+someone decides to pick it up, is **V2 features** (AI compatibility explanations, Smart
+Icebreakers, Profile Coach, Date Ideas, Safe Date mode, Date Planner, Profile Boost,
+Referral program, real Razorpay integration — see docs/ROADMAP.md's V2 section) — not
+started, and should not start until the "Before real production launch" gaps above are
+closed on a real environment with a live database, per this project's own MVP-first
+sequencing principle (docs/ROADMAP.md's "Notes on sequencing").
+Next Recommended Action: Get a real MongoDB connection (Atlas free tier is enough)
+verified in whatever environment picks this project up next — every DB-dependent
+behavior in this entire codebase (10 feature tasks' worth of indexes, `select: false`
+fields, unique constraints, aggregation queries) has only ever been verified via
+code inspection, standalone fake-model scripts, and server-boot smoke tests across
+every single task in this project's history, never against a real database. That one
+missing piece of verification is the actual gate on calling this "tested", not any
+remaining code work.

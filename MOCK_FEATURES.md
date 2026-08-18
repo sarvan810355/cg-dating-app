@@ -5,6 +5,14 @@ otherwise not a real production implementation yet, so nobody mistakes a placeho
 for a finished feature. Update this checklist as real implementations replace mocks —
 move items to "Resolved" rather than deleting them, so there's a record of what changed.
 
+**Reviewed 2026-08-18 (Task #6 — final polish/documentation wrap-up):** this list was
+checked against the actual codebase at the end of the MVP build and confirmed complete
+and accurate — every mock introduced across all 10 feature tasks (photo storage,
+SMS/OTP delivery, FCM push, Razorpay checkout, plus the smaller scope-gap items below)
+is already listed here, in one place, and none of the "Currently Mocked" items were
+resolved by this pass (this pass was audit/polish/docs, not new feature work — see
+`PROJECT_STATE.md`). No changes made to this file's content below beyond this note.
+
 ## Currently Mocked / Not Yet Configured
 
 - [ ] **MongoDB connection is optional/non-fatal in dev.** The backend does not yet hard-fail

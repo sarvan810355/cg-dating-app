@@ -10,6 +10,105 @@ next task that follows from it.
 
 ---
 
+## 2026-08-18 — Final polish, security audit, and documentation wrap-up (Task #6) — MVP complete
+
+- **Phase:** Cross-cutting wrap-up pass, closing out the last of the 12 internal tasks
+  that made up the MVP build (Phases 0-10 per `docs/ROADMAP.md`). Not a new feature
+  phase — this entry summarizes the whole MVP build's final state as much as this
+  pass's own work, per this task's "final dated entry summarizing the whole MVP build"
+  instruction.
+- **Task:** (1) full build/lint/boot verification across frontend and backend; (2) a
+  security audit against `docs/ARCHITECTURE.md`'s security requirements and
+  `docs/TESTING_STRATEGY.md`'s security checklist; (3) a light UI consistency
+  spot-check (dark mode / design tokens / loading-error-empty states) across
+  Discovery, Matches, Chat, Notifications, and the four Admin screens; (4) finalizing
+  every tracking doc to reflect true final MVP state.
+- **MVP summary (all 12 internal tasks, commits `95aeb5b` through this pass's own):**
+  repo/GitHub setup → project scaffold (`fd72a17`) → documentation set → authentication
+  (`3f440ca`) → profile system (`00c29f3`) → discovery + matching (`f86267a`) → chat
+  (`f027d73`) → notifications (`cc7fb76`) → verification (`0d724fe`) → safety/report/
+  block (`2ab2aca`) → subscription scaffolding (`9319600`) → admin panel (`093d0bc`) →
+  this final polish/audit/docs pass. Every MVP phase (0-10) is implemented and the app
+  is buildable and boots cleanly end-to-end; see `PROJECT_STATE.md` for the full
+  per-feature completion detail and every still-open divergence/scope-gap.
+- **Files touched (this pass):** `backend/models/User.js` (`password` field now
+  `select: false`), `backend/routes/auth.js` (login now `.select('+password')`; both
+  signup/login routes gained rate-limiter middleware), `backend/middleware/
+  rateLimiters.js` (new), `backend/package.json`/`package-lock.json` (`bcrypt` 5.1.1 →
+  6.0.0 closing a critical transitive `npm audit` finding in `node-tar`;
+  `express-rate-limit` added), `docs/SECURITY_AUDIT.md` (new), `BUGS.md` (BUG-001
+  added, P1), `PROJECT_STATE.md`, `TODO.md`, `MOCK_FEATURES.md`, `README.md`,
+  `docs/ROADMAP.md` (all finalized to reflect true MVP-complete state), this file.
+  **No frontend code changed** — the consistency spot-check found the existing dark
+  mode / design-token usage and loading/error/empty-state handling already solid
+  throughout (every screen routes through `frontend/src/api.js`'s single `request()`
+  helper, which already attaches structured error info consistently), so nothing
+  needed fixing there.
+- **Tests performed:** Frontend `npm install` (no changes needed), `npm run build`
+  (clean — `dist/index.html` + JS/CSS chunks, no errors), `npm run lint` (oxlint — 0
+  errors, the same 2 pre-existing `only-export-components` warnings on
+  `AuthContext.jsx`/`NotificationContext.jsx` carried forward unchanged from every
+  prior pass, no new warnings introduced). Backend: `npm install` (`npm audit` now 0
+  vulnerabilities, was 3 [2 high, 1 critical] before this pass), `node -e
+  "require('./server.js')"` boots cleanly ("CG Dating backend listening on port
+  5000", no syntax/import errors), `GET /api/health` returns 200 with the expected
+  body, process cleanly killable afterward (no lingering port — checked with `lsof -i
+  :5000`). The three security fixes were each verified without a live database, per
+  this project's established convention: (1) `User.password`'s new `select: false` +
+  `routes/auth.js`'s `.select('+password')` — verified via a standalone script
+  mounting a fake in-memory `User` model (respecting Mongoose `select` semantics)
+  under the real `routes/auth.js` over real HTTP: signup (201), login with correct
+  password (200), login with wrong password (401), and `GET /api/auth/me` (200) all
+  confirmed to never include a `password` key in any JSON response, `role` still
+  present on `/me`; (2) the new `loginLimiter`/`signupLimiter` — verified via a
+  standalone script mounting the real rate-limiter middleware on a minimal Express app
+  (no DB dependency) and sending 25 requests: first 20 returned 200, remaining 5
+  returned 429, exactly as configured (20/15min); (3) the `bcrypt` 5→6 upgrade —
+  verified `hash`/`compare`/`hashSync`/`compareSync` all round-trip correctly
+  (correct password compares `true`, wrong password compares `false`) via a standalone
+  script. All three scripts were deleted before this commit, per this project's
+  established "verify with throwaway scripts, never commit them" convention. The
+  broader security audit itself (secrets grep, `.env` git-history check, per-route
+  auth/role-gate coverage, sensitive-field-serialization spot-check, regex-injection
+  spot-check, ObjectId-validation spot-check) is documented in full, with every command
+  run and its result, in the new `docs/SECURITY_AUDIT.md` — not repeated here.
+- **Findings:** Two real, fixable-in-this-pass security gaps found and fixed (see
+  above and `docs/SECURITY_AUDIT.md`'s "Findings" section for the full detail): no
+  rate limiting at all on login/signup, and a defense-in-depth gap on
+  `User.password`'s serialization guard (never an active leak — every response
+  serializer in the codebase already builds a hand-picked object rather than
+  returning a raw document — but worth closing before a future route is added
+  carelessly). One larger gap — no rate limiting beyond auth, no `helmet`/
+  security-headers middleware — was deliberately **not** fixed piecemeal in this pass
+  (it's genuinely Phase 14 — Security Hardening — scope, cross-cutting and not yet
+  started) and is instead formally tracked as BUG-001 (P1) in `BUGS.md`. No other bugs
+  were found in the consistency/audit pass.
+- **Known limitation carried forward (unchanged, not this pass's to fix):** MongoDB
+  has never been reachable in any sandbox session across this entire project's
+  history — no local `mongod`, no Docker, `mongodb-memory-server`'s binary download
+  blocked. Every DB-dependent behavior in this codebase (10 feature tasks' worth of
+  indexes, `select: false` fields, unique constraints) has only ever been verified via
+  code inspection, standalone fake-model scripts, and server-boot smoke tests, never
+  against a real database — this remains the single biggest gate on calling this
+  project genuinely tested, and is explicitly called out as not-yet-done in
+  `PROJECT_STATE.md`/`TODO.md` rather than glossed over.
+- **Verdict:** the MVP is genuinely complete and buildable end-to-end (frontend build
+  + lint clean, backend boots cleanly, all 10 feature areas implemented and
+  cross-checked for auth coverage and consistency) — modulo the untested-live-database
+  caveat above, which is a standing sandbox limitation, not a code defect. This project
+  is explicitly **not "production ready"**: no live-DB testing has ever occurred, real
+  Cloudinary/Razorpay/FCM/SMS credentials don't exist, there's no automated test suite,
+  and BUG-001 (rate limiting/security headers beyond auth) is open. See TODO.md's
+  "Before real production launch" section for the complete, concrete gap list.
+- **Next task:** V2 feature scope (AI compatibility explanations, Smart Icebreakers,
+  Profile Coach, Date Ideas, Safe Date mode, Date Planner, Profile Boost, Referral
+  program, real Razorpay integration — see `docs/ROADMAP.md`'s V2 section) — not
+  started, and per this project's own MVP-first sequencing principle, should not start
+  until the "Before real production launch" gaps are closed on a real environment with
+  a live database first.
+
+---
+
 ## 2026-08-17 — Admin Panel, basic (Task #11) implemented
 
 - **Phase:** Phase 9 — Admin Panel, basic (`docs/ROADMAP.md` numbering; same

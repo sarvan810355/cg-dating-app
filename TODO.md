@@ -1,20 +1,84 @@
 # TODO — CG-Dating-App
 
-Flat prioritized task list, grouped by scope tier (MVP first, then V2, then V3).
+Flat prioritized task list, grouped by scope tier. **The MVP is complete** as of Task
+#6 (final polish/security audit/docs, 2026-08-18) — see `PROJECT_STATE.md` and
+`IMPLEMENTATION_PROGRESS.md`'s newest entry for the full build history. This file is
+now organized as: MVP — Done (below, kept for reference/traceability), **Before real
+production launch** (the concrete gaps standing between this MVP and a real deploy —
+read this section first if you're picking the project up next), then V2, then V3.
 Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
 `IMPLEMENTATION_PROGRESS.md`.
 
-## MVP (build first)
+## Before real production launch
+
+None of this is "V2 feature work" — it's what's still missing before this already-built
+MVP could actually go live for real users. Per this project's own MVP-first sequencing
+principle (`docs/ROADMAP.md`'s "Notes on sequencing"), V2 work should not start until
+these are closed.
+
+- [ ] **Live MongoDB Atlas connection, verified end-to-end.** No sandbox session across
+      this entire project's history has ever had a reachable MongoDB (no local `mongod`,
+      no Docker, `mongodb-memory-server`'s binary download blocked). Every single
+      DB-dependent behavior in this codebase — every index, every `select: false` field,
+      every unique constraint (User.email, Match's canonical-pair index, Block's
+      compound index), every aggregation query — has only ever been verified via code
+      inspection, standalone fake-model-over-real-HTTP scripts, and server-boot smoke
+      tests. This is the single largest gap; everything else on this list is smaller.
+- [ ] **Real provider credentials**, currently all MOCK/TEMPORARY (see
+      `MOCK_FEATURES.md` for the full detail on each): Cloudinary (photo storage — MOCK
+      base64/URL stored directly on Mongo documents), Firebase Cloud Messaging (push —
+      not implemented at all, in-app notifications work, background push doesn't), a
+      real SMS/OTP provider e.g. Twilio/MSG91 (OTP logic is real, delivery is a
+      console-log + dev-only response field), Razorpay (checkout is a MOCK — any
+      authenticated user currently gets any plan for free, see
+      `MOCK_FEATURES.md`'s explicit warning).
+- [ ] **Real `.env` production secrets** — a long random `JWT_SECRET`, the real
+      `MONGODB_URI` (Atlas), and the credentials above, generated fresh for production
+      and never reused from any dev/example value. Confirmed in this pass that no real
+      secret has ever been committed (`git log --all --full-history -- backend/.env` /
+      `frontend/.env` are both empty) — keep it that way.
+- [ ] **Seed a real `SUPER_ADMIN` account** on the production database — see
+      `SETUP.md`'s "Creating the first admin account" section for the one-time manual
+      `mongosh` command (no self-serve flow exists, intentionally).
+- [ ] **Automated test suite** per `docs/TESTING_STRATEGY.md` — `npm test` is not
+      implemented in either `backend/` or `frontend/` yet. Every test performed across
+      this project's entire history has been a manual/throwaway verification script,
+      never committed and never re-runnable as regression coverage.
+- [ ] **Unique index on `User.phone`** — currently just a plain trimmed string field, no
+      uniqueness constraint, unlike `User.email`.
+- [ ] **HTTPS / hosting setup** per `docs/ARCHITECTURE.md`'s Phase 15 (backend on
+      Render/Railway, DB on MongoDB Atlas, frontend on Vercel/Netlify, Cloudinary for
+      media) — nothing is deployed anywhere yet.
+- [ ] **BUG-001** (P1, see `BUGS.md`/`docs/SECURITY_AUDIT.md`) — no rate limiting beyond
+      `POST /api/auth/login`/`signup` (added in Task #6), no `helmet`/security-headers
+      middleware anywhere. Real Phase 14 (Security Hardening) scope.
+- [ ] Tighten CORS from the current wide-open `app.use(cors())` to an explicit origin
+      allowlist once the real production frontend origin (from the hosting step above)
+      is known — not urgent given bearer-token (not cookie) auth, but standard practice
+      before a public launch. See `docs/SECURITY_AUDIT.md`'s "Not re-litigated" section.
+
+## MVP — Done
+
+All of Phases 0-10 (`docs/ROADMAP.md`) shipped. Items below are kept exactly as
+originally tracked, including their documented divergences/scope-gaps (a `[ ]` here
+means a specific sub-item was intentionally deferred within an otherwise-shipped
+feature, e.g. "who liked you" within the shipped Matching feature — check
+`PROJECT_STATE.md`'s "Remaining Features" line or `MOCK_FEATURES.md` before assuming an
+unchecked line means the whole feature is unbuilt).
 
 ### Authentication
 - [x] Project scaffold (backend + frontend)
-- [ ] Signup / login / JWT issuance (in progress by parallel agent)
-- [ ] Protected `GET /api/auth/me` route
+- [x] Signup / login / JWT issuance
+- [x] Protected `GET /api/auth/me` route
 - [x] Mobile OTP verification flow — **not** a signup step; implemented as a
       separate post-signup Verification flow instead (Task #9, see the
       Verification section below) since signup itself is email/password only
-- [ ] Password reset / forgot password
-- [ ] Rate limiting on auth endpoints
+- [ ] Password reset / forgot password — not built; deferred, no route exists
+- [x] Rate limiting on auth endpoints — added in Task #6 (final polish/security
+      audit pass): `POST /api/auth/login` (20/15min/IP) and `POST /api/auth/signup`
+      (10/hour/IP) via `backend/middleware/rateLimiters.js`, previously had none —
+      see `docs/SECURITY_AUDIT.md`. **Divergence:** only these two endpoints; broader
+      rate limiting (messaging, etc.) is still open, see BUG-001 above.
 
 ### Profile
 - [x] Profile Mongoose schema (full fields, see docs/DATABASE_SCHEMA.md)
@@ -159,11 +223,27 @@ Check items off as they land; keep this in sync with `PROJECT_STATE.md` and
       full gap writeup; **not production-ready as-is**
 
 ### Cross-cutting MVP work
-- [ ] Security hardening pass (see docs/ARCHITECTURE.md + security requirements)
-- [ ] Input validation on all endpoints
-- [ ] Error handling / consistent error response format
-- [ ] Basic automated test suite (see docs/TESTING_STRATEGY.md)
-- [ ] Deployment setup (Render/Railway + MongoDB Atlas + Vercel/Netlify + Cloudinary)
+- [x] Security audit pass (Task #6) — full audit against docs/ARCHITECTURE.md's
+      security requirements performed, two real gaps fixed (auth rate limiting,
+      `User.password` defense-in-depth), one larger gap formally tracked (BUG-001) —
+      see `docs/SECURITY_AUDIT.md`. **Divergence:** this was an *audit* pass, not the
+      full Phase 14 "Security Hardening" build-out (helmet, broader rate limiting,
+      systematic input-validation layer) — see "Before real production launch" above.
+- [x] Input validation on all endpoints — **already present** per-route (inline field
+      checks in every handler — email format, password length, enum membership,
+      ObjectId validation on path params, string-length caps, etc.); confirmed via
+      spot-check in Task #6's audit, not a systematic shared validation
+      library/middleware. Good enough for MVP; a shared schema-validation layer
+      (e.g. zod/joi) would be a reasonable Phase 14 improvement, not required.
+- [x] Error handling / consistent error response format — **already present**: every
+      route returns `{ message: string, ...}` on error with an appropriate status
+      code, and the frontend's single `frontend/src/api.js#request()` helper
+      consistently surfaces `err.message`/`err.status`/`err.data` to every screen —
+      confirmed via spot-check in Task #6's consistency pass.
+- [ ] Basic automated test suite (see docs/TESTING_STRATEGY.md) — not built; see
+      "Before real production launch" above.
+- [ ] Deployment setup (Render/Railway + MongoDB Atlas + Vercel/Netlify + Cloudinary) —
+      not built; see "Before real production launch" above.
 
 ## V2 (after MVP ships end-to-end)
 
