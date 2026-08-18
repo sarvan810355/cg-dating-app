@@ -275,6 +275,19 @@ function Settings() {
           </Button>
         </Link>
 
+        {/* Task #18 — Safe Date mode + Date Planner (V2 scope, see
+            docs/ROADMAP.md's Phase 12). */}
+        <Link to="/safe-dates">
+          <Button variant="ghost" className="mt-2 w-full">
+            My Safe Dates
+          </Button>
+        </Link>
+        <Link to="/date-ideas">
+          <Button variant="ghost" className="mt-2 w-full">
+            Date Ideas
+          </Button>
+        </Link>
+
         {/* Task #11 — Admin panel (see docs/ROADMAP.md's Phase 9). Only
             rendered for ADMIN/SUPER_ADMIN/MODERATOR — per the task spec, this
             link (and the /admin section it points to) must be effectively

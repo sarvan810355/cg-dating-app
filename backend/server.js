@@ -17,6 +17,8 @@ const blocksRouter = require('./routes/blocks');
 const subscriptionRouter = require('./routes/subscription');
 const referralsRouter = require('./routes/referrals');
 const adminRouter = require('./routes/admin');
+const safeDatesRouter = require('./routes/safeDates');
+const dateIdeasRouter = require('./routes/dateIdeas');
 const { initSocket } = require('./socket');
 const { seedDefaultPlans } = require('./utils/entitlementUtils');
 
@@ -58,6 +60,12 @@ app.use('/api', referralsRouter);
 // requireRole(...) per route) — nothing here needs to change based on who's
 // calling.
 app.use('/api/admin', adminRouter);
+// Task #18 — Safe Date mode + Date Planner (V2 scope, see docs/ROADMAP.md's Phase
+// 12). Two separate routers: backend/routes/safeDates.js (owner-only Safe Date
+// plans) and backend/routes/dateIdeas.js (the stateless date-idea suggestion
+// generator) — see docs/API_DOCUMENTATION.md for the full route list.
+app.use('/api/safe-dates', safeDatesRouter);
+app.use('/api/date-ideas', dateIdeasRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'CG Dating API' });

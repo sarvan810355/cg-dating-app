@@ -106,6 +106,23 @@ tracked below.
       `frontend/src/pages/Signup.jsx` (prefillable via a `?ref=<CODE>` query param).
       **No real deep-link infrastructure** — the "shareable link" is just a copyable
       code + templated text, see `MOCK_FEATURES.md`'s entry.
+- [x] **Safe Date mode + Date Planner (Task #18)** (2026-08-18) — `SafeDate` model
+      (`backend/models/SafeDate.js`) + owner-only CRUD (`POST /api/safe-dates`,
+      `GET /api/safe-dates`(`/:id`), `PATCH .../check-in`|`/complete`|`/cancel`) with a
+      free-text "approximate public location" field (never GPS/exact address, per the
+      product spec's explicit privacy rule). "Missed check-in"/the pre-date reminder
+      are both **read-time computations**, not a real background scheduler or SMS/push
+      alert (no job queue or SMS provider exists in this project) —
+      `backend/utils/safeDateUtils.js`, see `MOCK_FEATURES.md`'s entry for the full
+      explanation. Date Planner: `GET /api/date-ideas` — a stateless, curated,
+      **not-real-AI** suggestion generator (`backend/utils/datePlanUtils.js`, same
+      no-`ANTHROPIC_API_KEY` constraint as Task #15), every suggestion a public
+      place/activity per the "never encourage isolated/private meeting locations"
+      safety rule. Frontend: `frontend/src/pages/PlanSafeDate.jsx` (the planning form,
+      reachable from Chat's new "Safe Date" header link), `frontend/src/pages/
+      SafeDates.jsx` ("My Safe Dates", reachable from Settings, overdue/reminder
+      banners + Check-In/Complete/Cancel actions), `frontend/src/pages/DateIdeas.jsx`
+      (standalone from Settings, and linked from the planning form).
 
 ## MVP — Done
 
@@ -304,9 +321,17 @@ unchecked line means the whole feature is unbuilt).
 - [x] AI Smart Icebreakers — same divergence as above: **implemented 2026-08-18 (Task
       #15) as deterministic, template-based generation, NOT via the real Claude API.**
 - [ ] AI Profile Coach suggestions
-- [ ] AI Date Ideas
-- [ ] Safe Date mode (safety timer, check-in, trusted contact)
-- [ ] Date Planner
+- [ ] AI Date Ideas — a real Claude-API-generated version; **not the same as the
+      Date Planner item below**, which shipped as a curated heuristic instead (no
+      `ANTHROPIC_API_KEY` configured, same constraint already true of Profile
+      Coach here).
+- [x] Safe Date mode (safety timer, check-in, trusted contact) — **implemented
+      2026-08-18 (Task #18)** — see the "Post-MVP feature additions" entry above.
+      "Missed check-in"/the pre-date reminder are both read-time computations, not
+      a real background scheduler or SMS/push alert — see `MOCK_FEATURES.md`.
+- [x] Date Planner — **implemented 2026-08-18 (Task #18) as a curated heuristic
+      suggestion generator, NOT via the real Claude API** (see the "AI Date Ideas"
+      note above and the "Post-MVP feature additions" entry above).
 - [ ] Private / Invisible browsing
 - [ ] Advanced filters
 - [ ] Profile Boost

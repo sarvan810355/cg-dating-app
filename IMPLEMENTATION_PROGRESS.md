@@ -10,6 +10,176 @@ next task that follows from it.
 
 ---
 
+## 2026-08-18 — Safe Date mode + Date Planner (Task #18, V2, user-requested)
+
+- **Phase:** Phase 12 — Growth & Engagement Features (`docs/ROADMAP.md`). V2 feature
+  addition requested directly by the user, built concurrently with Task #15
+  (Icebreakers/Why-You-Match, already committed — touched `Match`/`matches.js`) and
+  Task #17 (Referral program, touched `User.js`/`auth.js`) on the same branch. This
+  task's own backend changes were entirely new files plus one small additive mount in
+  `server.js`; frontend changes touched `App.jsx`/`Settings.jsx`/`Chat.jsx`
+  additively alongside those other two tasks' own changes to the same three files.
+- **Task:** Implement Safe Date mode (a safety plan a user creates for meeting a
+  match in person — public location note, a time window, an optional trusted
+  contact, check-in/complete/cancel actions, and an "overdue"/"missed check-in"
+  signal) and the Date Planner (a small heuristic date-idea suggestion generator).
+- **Safe Date — backend:** `backend/models/SafeDate.js` (new) — `user` (ref `User`),
+  optional `match` (ref `Match`), `location` (free text, required, max 200 chars —
+  an "approximate public location", **never** GPS coordinates, per the product
+  spec's explicit privacy requirement — no device-location field exists on this
+  model at all), `plannedStartAt`/`plannedEndAt`, optional
+  `trustedContactName`/`trustedContactPhone` (the phone is stored but **never**
+  actually used to send an SMS — no SMS provider is configured in this project, same
+  established MOCK/DEV-ONLY gap as mobile-OTP delivery), `status` enum
+  (`PLANNED`/`CHECKED_IN`/`COMPLETED`/`MISSED_CHECKIN`/`CANCELLED`), `checkedInAt`/
+  `completedAt`/`cancelledAt`, and `reminderNotifiedAt` (gates the one-time reminder
+  notification below). `backend/constants/safeDateOptions.js` (new) — the status
+  enum plus the three read-time-computation windows: `CHECKIN_GRACE_MINUTES` (30),
+  `MISSED_CHECKIN_GRACE_MINUTES` (120), `REMINDER_WINDOW_MINUTES` (60).
+  `backend/utils/safeDateUtils.js` (new) — `computeSafeDateStatus(doc, now)`, a PURE
+  function (no DB/IO) returning `{ effectiveStatus, statusChanged, isOverdue,
+  isReminderWindow }`, and `applySafeDateComputation(doc, { io })`, the DB-touching
+  wrapper the routes call that persists a `PLANNED` → `MISSED_CHECKIN` transition
+  when warranted and creates a one-time in-app `Notification` (type `'safety'`,
+  reusing the existing `backend/utils/notificationUtils.js#createNotification()` —
+  the same helper `match`/`like`/`message` notifications already use, including the
+  live `notification:new` Socket.IO emit) the first time a read lands inside the
+  reminder window. `backend/routes/safeDates.js` (new) — `POST /api/safe-dates`
+  (create, with full field validation including "end after start" and "start not in
+  the past"), `GET /api/safe-dates` (owner's own list, past + upcoming, with the
+  read-time computation applied per item), `GET /api/safe-dates/:id` (owner-only,
+  `404` — not `403` — for another user's plan, matching this codebase's existing
+  "don't leak existence of another user's record" convention), `PATCH .../check-in`,
+  `PATCH .../complete`, `PATCH .../cancel` (each owner-only, each rejecting an
+  already-terminal plan with `400`).
+- **Safe Date — the "missed check-in" / reminder design decision (documented up
+  front, not discovered mid-build):** there is no background job scheduler anywhere
+  in this codebase (no `node-cron`, no task queue) and no real SMS/push provider
+  configured, so a true "watch the clock and alert someone" implementation isn't
+  possible in this pass. Instead, both signals are computed **fresh on every read**
+  (`GET /api/safe-dates`/`GET /api/safe-dates/:id`) rather than faked as
+  always-accurate: `isOverdue` and the `MISSED_CHECKIN` transition are derived from
+  `now` vs. `plannedStartAt`/`plannedEndAt` at request time, and the reminder
+  `Notification` is real (persisted, live-delivered) but only fires if/when a read
+  happens to land inside the window — there is no guarantee it fires close to
+  `plannedStartAt` the way a real scheduled push would. **No SMS/call is ever sent
+  to the trusted contact** — this is explicitly deferred, not mocked with a fake
+  "sent" response; see `MOCK_FEATURES.md`'s new Safe Date entry for the full,
+  explicit wording.
+- **Date Planner — backend:** `backend/constants/dateIdeaOptions.js` (new) — budget
+  (`low`/`medium`/`high`) and activity-type
+  (`coffee`/`food`/`outdoor`/`movie`/`walk`/`other`) enums.
+  `backend/utils/datePlanUtils.js` (new) — a 10-item in-code curated list of
+  Chhattisgarh-relevant date ideas (coffee + evening walk, local food + a
+  photography spot, public park visit, multiplex movie, public-lake boating, a
+  museum/science-centre visit, a busy market walk, high tea, fine dining, a
+  botanical garden/zoo) and `getDateIdeaSuggestions({ budget, activityType, city })`,
+  a pure function returning 2-4 suggestions with progressive filter relaxation
+  (exact match → budget-only → activity-only → a small default set) so the response
+  is never empty or single-item; `city`, when given, only personalizes the returned
+  description text (no places/maps API is integrated). **Every curated idea is a
+  public place/activity** — cafés, restaurants, parks, multiplexes, public
+  lakes/gardens — per the product spec's explicit "never encourage first meetings in
+  isolated/private locations" safety rule; this is enforced by hand-curating the
+  list itself (verified by a keyword scan in this pass's verification script, see
+  below), not a runtime filter. `backend/routes/dateIdeas.js` (new) —
+  `GET /api/date-ideas?budget=&activityType=&city=`, protected, stateless (nothing
+  persisted — no `date_plans` collection exists, see `docs/DATABASE_SCHEMA.md`'s
+  divergence note), explicitly **not real AI** (no `ANTHROPIC_API_KEY` configured,
+  same constraint already documented for Task #15's Icebreakers/Why-You-Match).
+- **`backend/server.js`:** mounted `safeDatesRouter` at `/api/safe-dates` and
+  `dateIdeasRouter` at `/api/date-ideas` — additive alongside Task #17's
+  already-present `referralsRouter` mount (re-read and merged onto the file rather
+  than overwritten, after a `git`-modified-since-read conflict on the first attempt).
+- **Frontend:** `frontend/src/api.js` (new `createSafeDate`/`getSafeDates`/
+  `getSafeDate`/`checkInSafeDate`/`completeSafeDate`/`cancelSafeDate`/
+  `getDateIdeas`), `frontend/src/constants/dateIdeaOptions.js` (new — mirrored
+  budget/activity-type option lists for the two `<select>`s).
+  `frontend/src/pages/PlanSafeDate.jsx` (new) — the planning form (location,
+  start/end via `datetime-local` inputs, optional trusted-contact fields), reachable
+  from Chat's new "Safe Date" header link (carrying `?matchId=`) or standalone from
+  the Safe Dates list's "Plan a new Safe Date" button; a visible privacy note in the
+  UI itself (not just code comments) states the app never tracks exact location.
+  `frontend/src/pages/SafeDates.jsx` (new) — "My Safe Dates", upcoming/past
+  sections, an overdue banner and a "starting soon" reminder banner both driven
+  directly off the API's `isOverdue`/`isReminderWindow` fields (never computed
+  client-side), Check-In/Complete/Cancel buttons gated by the plan's current status.
+  `frontend/src/pages/DateIdeas.jsx` (new) — budget/activity-type/city filters,
+  linked from the planning form's "need ideas?" and standalone from Settings.
+  `frontend/src/App.jsx` (new `/safe-dates`, `/safe-dates/new`, `/date-ideas`
+  routes), `frontend/src/pages/Settings.jsx` (new "My Safe Dates"/"Date Ideas"
+  links, additive alongside Task #17's already-present "Invite & Earn" link),
+  `frontend/src/pages/Chat.jsx` (new "Safe Date" header link, additive alongside the
+  existing "Matches" link, Task #15's `CompatibilityBadge`, and `SafetyMenu`).
+- **Tests performed:** Backend — `node -e "require('./server.js')"` boots cleanly
+  (both alone and with Task #17's `referralsRouter` already mounted); `GET
+  /api/health` 200; `curl` with no `Authorization` header on every new route (`POST`/
+  `GET /api/safe-dates`, `GET`/`PATCH /api/safe-dates/:id`(`/check-in`|`/complete`|
+  `/cancel`), `GET /api/date-ideas`) returned 401. Two standalone Node scripts (run
+  from inside `backend/` so `node_modules` resolved, both deleted before commit):
+  (1) `__verify_safedate.js` hijacked `require.cache` for `models/SafeDate.js` with
+  a fake in-memory store (24-hex-char ids, so `mongoose.Types.ObjectId.isValid()`
+  checks in the real route code pass exactly as they would against real ObjectIds)
+  and mounted the REAL `backend/routes/safeDates.js` over real HTTP with two
+  different JWT-bearing users — confirmed create → check-in → complete, the cancel
+  path, validation errors (missing `location`, end-before-start, start-in-the-past),
+  a `400` on re-cancelling/re-completing an already-terminal plan, `404` on an
+  unknown-but-valid-format id, `400` on a malformed id, and — the specific
+  ownership-enforcement ask for this task — that user B gets `404` reading (`GET
+  /:id`) or mutating (`check-in`/`complete`/`cancel`) user A's plan, and that user
+  A's plan never appears in user B's own `GET /api/safe-dates` list; 24 checks, all
+  passed. (2) `__verify_safedate_logic.js` exercised `computeSafeDateStatus()`
+  directly (pure function, no DB/HTTP) across 9 `now`/`plannedStartAt`/
+  `plannedEndAt`/`status` combinations — far-future (not overdue, not reminder-due),
+  inside the 60-min reminder window, just past `plannedStartAt` within the 30-min
+  check-in grace (not yet overdue), past that grace but not yet past `plannedEndAt`
+  + 120-min grace (`isOverdue: true`, status still `PLANNED`), past that deadline
+  (persists `MISSED_CHECKIN`), one minute before that deadline (still `PLANNED`),
+  and that `CHECKED_IN`/`COMPLETED`/`MISSED_CHECKIN` are all left alone — plus
+  `getDateIdeaSuggestions()`: always 2-4 results (including the narrow-combo
+  fallback-relaxation path for `budget=low&activityType=movie`, which no single
+  curated idea satisfies), city personalization applied to every returned
+  description, and a keyword scan (`"my place"`, `"isolated"`, `"secluded"`, `"hotel
+  room"`, etc.) confirming no curated idea's own text suggests a private/isolated
+  location; 30 checks, all passed. A live-server curl pass additionally confirmed
+  `GET /api/date-ideas` with a real JWT returns sensible defaults, respects
+  `budget`/`activityType`/`city` filters, personalizes descriptions with the given
+  city, and 400s on an invalid `budget` value — and that mounting the two new
+  routers didn't break any pre-existing route (`GET /api/matches`,
+  `GET /api/referrals/me` still 401 with no auth). Frontend — `npm run build` clean
+  (no errors); `npm run lint` (oxlint) — 0 errors, same 2 pre-existing
+  `only-export-components` warnings carried forward (one `no-unused-vars` warning
+  introduced by an unnecessary cancellation-tracking variable in `SafeDates.jsx` was
+  caught by this same lint run and fixed before the final check).
+- **Docs updated:** `docs/DATABASE_SCHEMA.md` (`safe_dates` marked `[IMPLEMENTED]`
+  with the full divergence writeup from the original draft, `date_plans` marked
+  "not implemented as a persisted collection" with the Date Planner explanation, the
+  `Notes` section's geospatial-fields line corrected to exclude `safe_dates.location`
+  now that it's free text, not GeoJSON), `docs/API_DOCUMENTATION.md` (new §14 with
+  every route, the read-time-computation explanation reproduced as an explicit
+  callout, and the Date Planner's "not real AI" + public-places-only safety rule),
+  `docs/ROADMAP.md` (Phase 12 row updated to "In Progress", covering both this task
+  and the already-implemented-but-previously-unreflected Task #17 Referral program),
+  `MOCK_FEATURES.md` (two new entries under "Currently Mocked", using close to the
+  exact wording requested for the "missed check-in" limitation), `TODO.md` (both
+  "Safe Date mode" and "Date Planner" V2 checkboxes marked done, with a note
+  distinguishing this heuristic Date Planner from a possible future real-AI "AI Date
+  Ideas" item), `PROJECT_STATE.md`/this file (this entry).
+- **Rebase note:** per this task's instructions, ran `git pull --rebase` before the
+  final push, expecting to rebase onto Task #17 (Referral program) and/or Task #15
+  (Icebreakers) if either had pushed in the meantime — see this session's final
+  commit message / `git log` for whether a rebase was actually needed and, if so,
+  what (if anything) required manual conflict resolution.
+- **Next task:** Remaining V2 scope not yet done: AI Profile Coach, a real-AI
+  version of "AI Date Ideas" (both need a real Claude API integration), Private/
+  Invisible browsing, advanced filters, Profile Boost, Priority Like, real Razorpay
+  integration, voice/video calling, real Instagram OAuth — see `docs/ROADMAP.md`'s
+  V2 section and `TODO.md`. Absent a further specific user request, the "Before real
+  production launch" gaps in `TODO.md` (top of that file) remain the recommended
+  default next focus per this project's own MVP-first sequencing principle.
+
+---
+
 ## 2026-08-18 — Referral program / "Invite & Earn" (Task #17, V2, user-requested)
 
 - **Phase:** V2 (docs/ROADMAP.md's V2 section — "Referral program (Invite & Earn)"),

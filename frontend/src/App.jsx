@@ -13,6 +13,9 @@ import BlockedUsers from './pages/BlockedUsers';
 import SafetyCenter from './pages/SafetyCenter';
 import Subscription from './pages/Subscription';
 import Referrals from './pages/Referrals';
+import SafeDates from './pages/SafeDates';
+import PlanSafeDate from './pages/PlanSafeDate';
+import DateIdeas from './pages/DateIdeas';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminReports from './pages/AdminReports';
 import AdminVerifications from './pages/AdminVerifications';
@@ -111,6 +114,34 @@ function App() {
         element={
           <ProtectedRoute>
             <Referrals />
+          </ProtectedRoute>
+        }
+      />
+      {/* Task #18 — Safe Date mode + Date Planner (V2, see docs/ROADMAP.md's Phase
+          12). /safe-dates/new optionally takes a ?matchId= query param — see
+          frontend/src/pages/Chat.jsx's "Plan a Safe Date" header link and
+          frontend/src/pages/PlanSafeDate.jsx. */}
+      <Route
+        path="/safe-dates"
+        element={
+          <ProtectedRoute>
+            <SafeDates />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/safe-dates/new"
+        element={
+          <ProtectedRoute>
+            <PlanSafeDate />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/date-ideas"
+        element={
+          <ProtectedRoute>
+            <DateIdeas />
           </ProtectedRoute>
         }
       />

@@ -1248,3 +1248,181 @@ collection, and the reward-mechanism rationale).
   `unique` index on `referralCode`, generated with retry-on-collision
   (`backend/utils/referralUtils.js#generateUniqueReferralCode()`); see
   `docs/DATABASE_SCHEMA.md` for the full generation-strategy writeup.
+
+## 14. Safe Date mode + Date Planner — `[IMPLEMENTED, Task #18, V2 scope]`
+
+Two independent pieces, both V2 (see `docs/ROADMAP.md`'s Phase 12 "Growth & Engagement
+Features"): **Safe Date mode** (`/api/safe-dates`, routes in
+`backend/routes/safeDates.js`, model in `backend/models/SafeDate.js`, read-time status
+computation in `backend/utils/safeDateUtils.js`) and the **Date Planner**
+(`/api/date-ideas`, a stateless suggestion generator, routes in
+`backend/routes/dateIdeas.js`, curated list + filtering in
+`backend/utils/datePlanUtils.js`). See `docs/DATABASE_SCHEMA.md`'s `safe_dates`/
+`date_plans` sections for the full field-by-field divergence writeup, and
+`MOCK_FEATURES.md`'s Safe Date entry for the "why read-time, not a real scheduler/SMS
+alert" explanation reproduced in condensed form below.
+
+### `POST /api/safe-dates`
+- **Auth:** required. Creates a new plan, owned by the caller.
+- **Request body:**
+  ```json
+  {
+    "matchId": "...",
+    "location": "Marine Drive area, VIP Road, Raipur",
+    "plannedStartAt": "2026-08-20T15:00:00.000Z",
+    "plannedEndAt": "2026-08-20T17:00:00.000Z",
+    "trustedContactName": "Priya",
+    "trustedContactPhone": "+91 98765 43210"
+  }
+  ```
+- **Validation:** `location` required, trimmed, non-empty, max 200 chars — an
+  **approximate public location**, never exact GPS coordinates (see the privacy note
+  below). `plannedStartAt`/`plannedEndAt` required valid dates; `plannedEndAt` must be
+  after `plannedStartAt`; `plannedStartAt` cannot be more than 5 minutes in the past
+  (a small clock-skew allowance, not a hard "must be in the future" edge case).
+  `matchId` optional — if provided, must be a valid id resolving to a real `Match` the
+  caller is a participant in (`404`/`403` otherwise); this feature is meant for
+  meeting a match, but the reference isn't required (e.g. a date arranged outside the
+  app). `trustedContactName` optional, max 100 chars. `trustedContactPhone` optional,
+  max 20 chars, loosely format-checked (digits/spaces/`+`/`-`/parens only) — **stored
+  for the user's own reference only; NEVER actually used to send an SMS/call** (no SMS
+  provider is configured in this project — see `MOCK_FEATURES.md`).
+- **Success response:** `201 Created` — `{ "safeDate": { ...see the shared shape below } }`.
+- **Errors:** `400` — validation failure (see above); `403` — `matchId` given but the
+  caller isn't a participant of that match; `404` — `matchId` given but no such match;
+  `401`; `500`.
+
+### `GET /api/safe-dates`
+- **Auth:** required. The caller's own plans only — **owner-only**, no route in this
+  section ever returns another user's Safe Date plan.
+- **Query params (optional):** `page` (default `1`), `limit` (default `20`, capped at
+  `50`), `status` (filter to one exact status).
+- Returns both past and upcoming plans, newest planned-start first. **Every item's
+  `status`/`isOverdue`/`isReminderWindow` is (re)computed fresh on this call** — see
+  the "Read-time status computation" note below; a `PLANNED` plan discovered to be
+  well past due is transitioned to `MISSED_CHECKIN` and persisted right here, and a
+  plan newly inside its reminder window gets its one-time in-app reminder
+  `Notification` created right here too.
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "safeDates": [
+      {
+        "id": "...", "userId": "...", "matchId": "..." ,
+        "location": "Marine Drive area, VIP Road, Raipur",
+        "plannedStartAt": "...", "plannedEndAt": "...",
+        "trustedContactName": "Priya", "trustedContactPhone": "+91 98765 43210",
+        "status": "PLANNED",
+        "checkedInAt": null, "completedAt": null, "cancelledAt": null,
+        "isOverdue": false, "isReminderWindow": false,
+        "createdAt": "...", "updatedAt": "..."
+      }
+    ],
+    "page": 1, "hasMore": false
+  }
+  ```
+- **Errors:** `401`; `500`.
+
+### `GET /api/safe-dates/:id`
+- **Auth:** required, **owner-only** — same shape as one entry above. A valid id that
+  belongs to a *different* user is a `404`, not a `403` (same "don't leak existence of
+  another user's record" convention already used by `GET /api/notifications/:id`-style
+  routes elsewhere in this codebase) — a caller genuinely cannot tell the difference
+  between "doesn't exist" and "exists but isn't yours".
+- Same read-time computation as the list route above applies to this single item too.
+- **Errors:** `400` — invalid id; `401`; `404` — no such plan for this caller
+  (including one that belongs to someone else); `500`.
+
+### `PATCH /api/safe-dates/:id/check-in`
+- **Auth:** required, owner-only. "I've arrived / I'm safe." Sets `status:
+  'CHECKED_IN'` and `checkedInAt`. Allowed from `PLANNED` **or** `MISSED_CHECKIN` (a
+  late check-in is still a valid "I'm safe" signal) — `400` if the plan is already
+  `COMPLETED`/`CANCELLED`.
+- **Success response:** `200 OK` — `{ "safeDate": { ... } }`.
+- **Errors:** `400` — already terminal; `401`; `404` — not found/not owner; `500`.
+
+### `PATCH /api/safe-dates/:id/complete`
+- **Auth:** required, owner-only. The user manually confirms the date ended safely.
+  Sets `status: 'COMPLETED'` and `completedAt`. Allowed from any non-terminal state
+  (`PLANNED`, `CHECKED_IN`, or `MISSED_CHECKIN`) — `400` if already
+  `COMPLETED`/`CANCELLED`.
+- **Success response:** `200 OK` — `{ "safeDate": { ... } }`.
+- **Errors:** `400` — already terminal; `401`; `404` — not found/not owner; `500`.
+
+### `PATCH /api/safe-dates/:id/cancel`
+- **Auth:** required, owner-only. Sets `status: 'CANCELLED'` and `cancelledAt`. Same
+  non-terminal-state allowance/`400` behavior as `complete` above.
+- **Success response:** `200 OK` — `{ "safeDate": { ... } }`.
+- **Errors:** `400` — already terminal; `401`; `404` — not found/not owner; `500`.
+
+### Read-time status computation — `isOverdue` / `MISSED_CHECKIN` / the reminder notification
+
+> ## ⚠️ SIMPLIFICATION — read-time computation, not a real scheduler or SMS alert
+> There is **no background job scheduler anywhere in this codebase** (no `node-cron`,
+> no task queue) and **no real SMS/push provider configured** (same MOCK/DEV-ONLY gap
+> already documented for mobile-OTP verification, see `MOCK_FEATURES.md`). Building a
+> real "alert me / alert my trusted contact if I don't check in" feature would need
+> both. Instead, `backend/utils/safeDateUtils.js#computeSafeDateStatus()` is a pure
+> function re-evaluated **every time** `GET /api/safe-dates` or
+> `GET /api/safe-dates/:id` is called:
+> - `isOverdue: true` once a still-`PLANNED` plan is more than 30 minutes
+>   (`CHECKIN_GRACE_MINUTES`) past `plannedStartAt` with no check-in.
+> - `status` is persisted to `MISSED_CHECKIN` once a still-`PLANNED` plan is more than
+>   120 minutes (`MISSED_CHECKIN_GRACE_MINUTES`) past `plannedEndAt` with no check-in —
+>   the only write this computation ever performs.
+> - `isReminderWindow: true`, and a one-time real in-app `Notification` (type
+>   `'safety'`, via the existing `backend/utils/notificationUtils.js#createNotification()`
+>   — the same helper `match`/`like`/`message` notifications use, including the live
+>   `notification:new` Socket.IO emit), when `now` falls within 60 minutes
+>   (`REMINDER_WINDOW_MINUTES`) before `plannedStartAt` for a still-`PLANNED` plan.
+>   `reminderNotifiedAt` gates this to firing at most once per plan.
+> **What this means in practice:** the reminder notification is a REAL, persisted,
+> live-delivered in-app notification — but it only fires if/when the plan owner's own
+> client happens to call a GET route while `now` is inside the reminder window. There
+> is no proactive push telling the user "your date starts in an hour" the way a real
+> scheduled job would guarantee. Likewise, `MISSED_CHECKIN` only becomes visible the
+> next time *anyone* reads that plan (or the list) after the grace period has passed —
+> nothing watches the clock in the background. **Nobody — not the app, not any real
+> person — is ever paged/SMS'd/called if a user misses a check-in;** the trusted
+> contact's phone number is stored for the user's own reference only (see
+> `POST /api/safe-dates` above) and is never actually contacted. A real
+> implementation would need a job queue (e.g. `node-cron` or a proper task queue) plus
+> a real SMS provider (e.g. Twilio/MSG91, same gap already open for mobile-OTP
+> delivery), neither of which exist in this project yet.
+
+### `GET /api/date-ideas`
+- **Auth:** required.
+- **Query params (all optional):** `budget` (`low`|`medium`|`high`), `activityType`
+  (`coffee`|`food`|`outdoor`|`movie`|`walk`|`other`), `city` (free text, used only to
+  personalize the returned description text — there is no places/maps API integrated
+  in this project, so it never looks up a real venue).
+- **Stateless — nothing is persisted.** Returns 2-4 suggestions from a small curated,
+  in-code static list (`backend/utils/datePlanUtils.js`), progressively relaxing the
+  filter (budget-only, then activity-only, then a small default set) if an exact
+  budget+activityType combination would otherwise return fewer than 2 results — this
+  endpoint never returns an empty or single-item list.
+  > ## ⚠️ NOT REAL AI
+  > This is plain heuristic filtering over an in-code list — there is no
+  > `ANTHROPIC_API_KEY` configured for this project (same constraint already
+  > documented for Task #15's Icebreakers/Why-You-Match). See `MOCK_FEATURES.md`.
+- **Safety rule (explicit product-spec requirement):** every curated suggestion is a
+  **public** place/activity — cafés, restaurants, parks, malls, multiplexes, public
+  lakes/gardens — never a private residence or an isolated/unsupervised spot. This is
+  enforced by hand-curating the list itself, not by any runtime filter (there's
+  nothing to filter — nothing private is ever in the list to begin with).
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "ideas": [
+      {
+        "id": "coffee-evening-walk",
+        "title": "Coffee + evening walk",
+        "description": "Grab a coffee at a well-known local café, then take an easy walk together somewhere public and well-lit — a market road or a park with other people around.",
+        "budgets": ["low", "medium"],
+        "activityTypes": ["coffee", "walk"]
+      }
+    ],
+    "budget": null, "activityType": null, "city": null
+  }
+  ```
+- **Errors:** `400` — `budget`/`activityType` not one of the allowed values; `401`; `500`.

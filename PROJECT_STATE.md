@@ -4,14 +4,64 @@ polish, security audit, documentation wrap-up) closed out the last of the 12 int
 tasks that made up the MVP build. Since then, post-MVP V2 features have been added by
 explicit user request: Instagram profile linking (self-reported handle, not OAuth),
 Why-You-Match + Smart Icebreakers (Task #15, deterministic heuristics, not real AI),
-and a Referral program / "Invite & Earn" (Task #17 — see "Current Task" below and
-MOCK_FEATURES.md). Other V2 work (Safe Date/Date Planner, Boost/Priority Like, etc.)
-may be in progress concurrently on this branch — check `git log` for the true current
-state rather than trusting this narrative alone.
+a Referral program / "Invite & Earn" (Task #17), and Safe Date mode + Date Planner
+(Task #18 — see "Current Task" below and MOCK_FEATURES.md). Other V2 work
+(Boost/Priority Like, etc.) may be in progress concurrently on this branch — check
+`git log` for the true current state rather than trusting this narrative alone.
 Phases 13/14/15 (Testing, full Security Hardening, Deployment) remain cross-cutting
 work not yet started — see "Remaining Features" below and docs/ROADMAP.md.
-Current Task: **V2 feature, user-requested: Task #17 — Referral program ("Invite &
-Earn")**, added 2026-08-18. Every user gets a unique, human-shareable 7-character
+Current Task: **V2 feature, user-requested: Task #18 — Safe Date mode + Date
+Planner**, added 2026-08-18. Two independent pieces (docs/ROADMAP.md's Phase 12):
+**Safe Date mode** — `SafeDate` model (`backend/models/SafeDate.js`: `user`, optional
+`match`, free-text `location` — an "approximate public location", explicitly **never**
+exact GPS coordinates or silently-tracked device location, per the product spec's
+privacy requirement — `plannedStartAt`/`plannedEndAt`, optional
+`trustedContactName`/`trustedContactPhone`, `status` enum
+`PLANNED`/`CHECKED_IN`/`COMPLETED`/`MISSED_CHECKIN`/`CANCELLED`, `checkedInAt`), owner-
+only CRUD (`POST /api/safe-dates`, `GET /api/safe-dates`(`/:id`),
+`PATCH .../check-in`|`/complete`|`/cancel` — `backend/routes/safeDates.js`; a
+mismatched id is a `404`, matching this codebase's existing "don't leak existence of
+another user's record" convention, not a `403`). **"Missed check-in" and the pre-date
+reminder are both READ-TIME computations** (`backend/utils/safeDateUtils.js#computeSafeDateStatus()`/
+`applySafeDateComputation()`), not a real background job or a real alert — there is no
+job scheduler anywhere in this codebase (no `node-cron`, no task queue) and no real
+SMS/push provider configured (same MOCK/DEV-ONLY gap already true of mobile-OTP
+delivery): every `GET /api/safe-dates`/`GET /api/safe-dates/:id` call recomputes
+`isOverdue` (30 min past `plannedStartAt`, no check-in) fresh, persists a
+`PLANNED` → `MISSED_CHECKIN` transition once 120 min past `plannedEndAt` with still no
+check-in, and — the first time a read lands inside the 60-min-before-`plannedStartAt`
+reminder window — creates a genuine in-app `Notification` (type `'safety'`, reusing
+`backend/utils/notificationUtils.js#createNotification()`, gated by a new
+`reminderNotifiedAt` field so it never duplicates) rather than faking a "notification
+was sent" claim; **no SMS/call is ever sent to the trusted contact**, that phone
+number is stored for the user's own reference only — see MOCK_FEATURES.md's Safe Date
+entry for the full "why read-time, not a scheduler" writeup. **Date Planner** —
+`GET /api/date-ideas?budget=&activityType=&city=` (`backend/routes/dateIdeas.js`,
+`backend/utils/datePlanUtils.js`), a **stateless, curated, NOT-real-AI** suggestion
+generator (no `ANTHROPIC_API_KEY` configured, same constraint already true of Task
+#15's Icebreakers/Why-You-Match) returning 2-4 suggestions from a 10-item in-code list
+of Chhattisgarh-relevant, **always-public** places/activities (cafés, restaurants,
+parks, multiplexes, public lakes/gardens — never anything isolated/private, per the
+product spec's explicit safety rule), with progressive filter relaxation so the
+response is never empty or single-item. Frontend:
+`frontend/src/pages/PlanSafeDate.jsx` (the planning form — location/start/end/
+optional trusted-contact fields, reachable from Chat's new "Safe Date" header link,
+carrying `?matchId=`), `frontend/src/pages/SafeDates.jsx` ("My Safe Dates" — upcoming/
+past lists, overdue/reminder banners driven directly by the API's `isOverdue`/
+`isReminderWindow` fields, Check-In/Complete/Cancel actions, reachable from Settings),
+`frontend/src/pages/DateIdeas.jsx` (standalone from Settings, and linked from the
+planning form's "need ideas?"), `frontend/src/constants/dateIdeaOptions.js` (mirrored
+enums for the two select dropdowns). Concurrency note: this task was built alongside
+Task #15 (Icebreakers, already committed, touched `Match`/`matches.js`) and Task #17
+(Referral program, touched `User.js`/`auth.js`) on the same branch — this task's own
+backend changes were entirely new files (`SafeDate.js`, `safeDates.js`,
+`dateIdeas.js`, `safeDateUtils.js`, `datePlanUtils.js`, two new constants files) plus
+one small additive mount in `server.js`; frontend changes touched `App.jsx`
+(new routes), `Settings.jsx` (two new links), and `Chat.jsx` (one new header link) —
+all additive, alongside whatever the other two tasks already had in those same three
+frontend files, kept and rebased onto rather than overwritten. See
+`IMPLEMENTATION_PROGRESS.md`'s newest entry for the full verification detail.
+Before this, Task #17 — Referral program ("Invite & Earn"), added 2026-08-18. Every user gets a unique, human-shareable 7-character
 referral code (uppercase alphanumeric, excluding ambiguous `0`/`O`/`1`/`I`) generated
 at signup time (`backend/utils/referralUtils.js#generateUniqueReferralCode()` —
 pre-checked uniqueness with retry-on-collision, the schema's own `unique` index as
@@ -125,14 +175,14 @@ Features In Progress: None — the MVP (Phases 0-10) is complete. Next work is e
 feature scope or the cross-cutting Phases 13-15 (Testing, full Security Hardening,
 Deployment) — see "Next Exact Task" below.
 Remaining Features (all deliberately out of MVP scope, not gaps in this pass): AI
-Profile Coach and AI Date Ideas (V2, would need a real Claude API integration — see
-MOCK_FEATURES.md; Why-You-Match and Smart Icebreakers are now implemented as
-deterministic heuristics instead — see "Current Task" above), Private/Invisible
-browsing, advanced filters, Profile Boost, Priority Like, real Razorpay integration,
-voice/video calling (all V2 — Referral program is now implemented, see "Current Task"
-above; Safe Date mode and Date Planner may also be implemented or in progress
-concurrently on this branch by now; check `git log` rather than trusting this line);
-CG Connect/Events, advanced Trust Engine, ML
+Profile Coach and a real-AI version of AI Date Ideas (V2, would need a real Claude API
+integration — see MOCK_FEATURES.md; Why-You-Match and Smart Icebreakers are already
+implemented as deterministic heuristics, and Date Planner is already implemented as a
+curated heuristic suggestion generator — not the same as a future real-AI "AI Date
+Ideas" — see "Current Task" above), Private/Invisible browsing, advanced filters,
+Profile Boost, Priority Like, real Razorpay integration, voice/video calling (all V2 —
+Referral program and Safe Date mode/Date Planner are now implemented, see "Current
+Task" above); CG Connect/Events, advanced Trust Engine, ML
 recommendations, advanced admin
 analytics, statewide/national expansion, city-scale SEO pages, Capacitor native wrapper
 (all V3). Also still deferred within already-shipped MVP features (unchanged from
@@ -160,7 +210,40 @@ filtering yet. Chat is text-only. Report evidence is plain strings, no file uplo
 automated test suite exists in either backend/ or frontend/ (see
 docs/TESTING_STRATEGY.md). BUG-001 (rate limiting/security headers beyond auth) is
 newly tracked in this pass — see above.
-Last Successful Test (Task #17 — Referral program, this pass): Backend —
+Last Successful Test (Task #18 — Safe Date mode + Date Planner, this pass): Backend —
+`node -e "require('./server.js')"` boots cleanly (mounted alongside Task #17's
+`referralsRouter`, already present on the shared `server.js` when this pass started),
+no import/syntax errors; `GET /api/health` 200; `curl` with no `Authorization` header
+on every new route (`POST/GET /api/safe-dates`, `GET/PATCH /api/safe-dates/:id*`,
+`GET /api/date-ideas`) returned 401, confirming none of the existing routes'
+auth-gating broke. Two standalone Node scripts (run from inside `backend/` so
+`node_modules` resolved, both deleted before commit per this project's established
+convention): (1) `__verify_safedate.js` hijacked `require.cache` for `models/
+SafeDate.js` with a fake in-memory store and mounted the REAL
+`backend/routes/safeDates.js` over real HTTP (same fake-model-over-real-route pattern
+used by every prior task's DB-independent verification in this project) — confirmed
+the full create → check-in → complete lifecycle and the cancel path, validation
+errors (missing `location`, `plannedEndAt` before `plannedStartAt`, `plannedStartAt`
+in the past), and — the specific ask for this task — that a second user gets `404` on
+`GET`/`PATCH .../check-in`/`.../complete`/`.../cancel` for the first user's plan, and
+that user's plan never appears in the second user's own `GET /api/safe-dates` list;
+24 checks, all passed. (2) `__verify_safedate_logic.js` exercised
+`computeSafeDateStatus()` (no DB, no HTTP — a pure function) across 9 `now`/
+`plannedStartAt`/`plannedEndAt` combinations: far-future (not overdue, not in
+reminder window), inside the 60-min reminder window, just past `plannedStartAt`
+within the 30-min check-in grace (not yet overdue), well past `plannedStartAt` but
+not yet past `plannedEndAt` + 120-min grace (`isOverdue: true`, status still
+`PLANNED`), well past that grace deadline (persists `MISSED_CHECKIN`), one minute
+before that deadline (still `PLANNED`), and that `CHECKED_IN`/`COMPLETED`/
+`MISSED_CHECKIN` states are all left alone (no re-computation) — plus
+`getDateIdeaSuggestions()` filtering (always 2-4 results including the narrow-combo
+fallback-relaxation path, city personalization applied, and a keyword scan confirming
+no curated idea's text mentions a private/isolated location); 30 checks, all passed.
+Frontend — `npm run build` clean (no errors, `dist/` produced); `npm run lint`
+(oxlint) — 0 errors, the same 2 pre-existing `only-export-components` warnings
+carried forward, no new warnings (one `no-unused-vars` warning introduced then fixed
+during this pass, see `IMPLEMENTATION_PROGRESS.md`'s newest entry).
+Last Successful Test (Task #17 — Referral program, prior pass): Backend —
 `node -e "require('./server.js')"` boots cleanly (both alone and alongside Task #18's
 concurrently-added `safeDates`/`dateIdeas` routers already present on the shared
 `server.js`), no import/syntax errors; `GET /api/health` 200; `curl` with no
@@ -256,7 +339,24 @@ empty states confirmed present on Discovery, Matches, Chat, NotificationBell, an
 four Admin screens (all funnel through `frontend/src/api.js`'s single `request()`
 helper, which attaches `.status`/`.data` to thrown errors consistently) — no changes
 needed.
-Last Modified Files (Task #17 — Referral program, this pass): backend/constants/
+Last Modified Files (Task #18 — Safe Date mode + Date Planner, this pass):
+backend/constants/safeDateOptions.js (new), backend/constants/dateIdeaOptions.js
+(new), backend/models/SafeDate.js (new), backend/utils/safeDateUtils.js (new),
+backend/utils/datePlanUtils.js (new), backend/routes/safeDates.js (new),
+backend/routes/dateIdeas.js (new), backend/server.js (mounted both new routers,
+additive alongside Task #17's already-present referralsRouter),
+frontend/src/api.js (new createSafeDate/getSafeDates/getSafeDate/checkInSafeDate/
+completeSafeDate/cancelSafeDate/getDateIdeas), frontend/src/constants/
+dateIdeaOptions.js (new), frontend/src/pages/PlanSafeDate.jsx (new),
+frontend/src/pages/SafeDates.jsx (new), frontend/src/pages/DateIdeas.jsx (new),
+frontend/src/App.jsx (new /safe-dates, /safe-dates/new, /date-ideas routes),
+frontend/src/pages/Settings.jsx (new "My Safe Dates"/"Date Ideas" links, additive
+alongside Task #17's already-present "Invite & Earn" link), frontend/src/pages/
+Chat.jsx (new "Safe Date" header link, additive alongside the existing Matches/
+SafetyMenu links and Task #15's already-present CompatibilityBadge),
+docs/DATABASE_SCHEMA.md, docs/API_DOCUMENTATION.md, docs/ROADMAP.md,
+MOCK_FEATURES.md, TODO.md, this file, IMPLEMENTATION_PROGRESS.md.
+Last Modified Files (Task #17 — Referral program, prior pass): backend/constants/
 referralOptions.js (new), backend/utils/referralUtils.js (new), backend/routes/
 referrals.js (new), backend/models/User.js (new referralCode/referredBy fields +
 indexes), backend/routes/auth.js (signup accepts optional referralCode, generates a
@@ -300,43 +400,47 @@ package-lock.json (bcrypt 5.1.1 → 6.0.0, express-rate-limit added), docs/
 SECURITY_AUDIT.md (new), BUGS.md (BUG-001 added), PROJECT_STATE.md (this file),
 IMPLEMENTATION_PROGRESS.md, TODO.md, MOCK_FEATURES.md, README.md, docs/ROADMAP.md (all
 updated to reflect final MVP-complete state — see git log for the exact diff).
-Database Status: `User` gained `referralCode` (unique, sparse) and `referredBy`
-(nullable ref, `immutable`) fields this pass (Task #17 — Referral program); `Profile`
-gained `instagramHandle` in a prior pass. MongoDB/Mongoose schemas implemented for
-User, Profile, Like, Match,
-Message, Notification, Block, Report, Plan, Subscription, and AuditLog; no live DB
-connection has ever been verified in any sandbox session across this entire project —
-this remains the top technical-debt item (see "Known Technical Debt" and TODO.md's
-"Before real production launch" section).
+Database Status: New `SafeDate` collection this pass (Task #18 —
+`backend/models/SafeDate.js`: `user`, optional `match`, free-text `location`,
+`plannedStartAt`/`plannedEndAt`, optional `trustedContactName`/`trustedContactPhone`,
+`status`, `checkedInAt`/`completedAt`/`cancelledAt`, `reminderNotifiedAt`); `User`
+gained `referralCode`/`referredBy` in the prior pass (Task #17); `Profile` gained
+`instagramHandle` before that. `date_plans` (the Date Planner's originally-drafted
+collection) was **not** implemented — the Date Planner shipped as a stateless
+suggestion endpoint instead, nothing persisted, see `docs/DATABASE_SCHEMA.md`'s
+divergence note. MongoDB/Mongoose schemas implemented for User, Profile, Like, Match,
+Message, Notification, Block, Report, Plan, Subscription, AuditLog, and now SafeDate;
+no live DB connection has ever been verified in any sandbox session across this
+entire project — this remains the top technical-debt item (see "Known Technical
+Debt" and TODO.md's "Before real production launch" section).
 Backend Status: Express + Socket.IO server (same HTTP server) running with auth +
 profile + discovery + matches + notifications + verification + reports + blocks +
-subscription + referrals + admin routes (plus whatever Task #18 has added
-concurrently — check `git log`). This pass added `GET /api/referrals/me` and
-extended `POST /api/auth/signup` with an optional `referralCode` body field; every
-other route unchanged in behavior. Boots cleanly; `GET /api/health` confirmed live.
-Frontend Status: All screens from every prior pass unchanged this pass (consistency
-spot-check found nothing requiring a fix — dark mode tokens and loading/error/empty
-states already solid throughout). `npm run build`/`npm run lint` both clean.
+subscription + referrals + safe-dates + date-ideas + admin routes. This pass added
+`POST/GET /api/safe-dates`, `GET/PATCH /api/safe-dates/:id*`, and
+`GET /api/date-ideas`; every other route unchanged in behavior. Boots cleanly;
+`GET /api/health` confirmed live.
+Frontend Status: This pass added three new screens (`PlanSafeDate.jsx`,
+`SafeDates.jsx`, `DateIdeas.jsx`) plus two new Settings links and one new Chat header
+link — every other screen unchanged in behavior. `npm run build`/`npm run lint` both
+clean (0 errors, same 2 pre-existing warnings carried forward).
 Authentication Status: Implemented (signup/login/JWT/me endpoint), now with rate
 limiting on both signup and login and the password hash never selected by default —
 unchanged otherwise.
-AI Status: **Why-You-Match and Smart Icebreakers implemented this pass (Task #15)** —
-`backend/utils/compatibilityUtils.js` / `backend/utils/icebreakerUtils.js`, exposed via
-`GET /api/matches` (`compatibility` field) and `GET /api/matches/:matchId/
-compatibility` / `.../icebreakers`. **Not a real Claude API integration** — no
-`ANTHROPIC_API_KEY` is configured anywhere in this project (see
-`backend/.env.example`), so both are deterministic, server-side profile-comparison
-heuristics instead; see MOCK_FEATURES.md for the full explanation and what a real
-upgrade would need. AI Profile Coach and AI Date Ideas remain not started by this
-session (see docs/ROADMAP.md Phase 11) — Date Ideas may have separate work in
-progress elsewhere on this branch concurrently; check `git log` for its true status.
+AI Status: Why-You-Match and Smart Icebreakers (Task #15) — deterministic,
+server-side profile-comparison heuristics, exposed via `GET /api/matches`
+(`compatibility` field) and `GET /api/matches/:matchId/compatibility`/
+`.../icebreakers`. **Not a real Claude API integration** — no `ANTHROPIC_API_KEY` is
+configured anywhere in this project (see `backend/.env.example`). The Date Planner
+(Task #18, this pass, `GET /api/date-ideas`) is the same story — a curated heuristic
+suggestion generator, not real AI. AI Profile Coach and a real-AI version of "AI Date
+Ideas" remain not started (see docs/ROADMAP.md Phase 11); see MOCK_FEATURES.md for
+the full explanation and what a real upgrade would need.
 Payment Status: Subscription scaffolding implemented — MOCK checkout, not real
 Razorpay yet (unchanged this pass; still explicitly not production-ready as-is, see
-MOCK_FEATURES.md). This pass added a second, non-payment way a `Subscription` row can
-be created: the Task #17 referral reward (`paymentProvider: 'referral_reward'`,
-7 days of `CG_PLUS`, granted for free on a successful referred signup) — a real
-`Subscription` row gated by the same real `hasFeature()` entitlement check as a paid
-plan, just not itself a payment.
+MOCK_FEATURES.md). The Task #17 referral reward (`paymentProvider:
+'referral_reward'`, 7 days of `CG_PLUS`, granted for free on a successful referred
+signup) remains the one non-payment way a `Subscription` row can be created —
+unchanged this pass.
 Admin Status: Implemented — role/accountStatus on User, role-gated /api/admin/* routes
 (dashboard, reports queue, photo-verification queue, suspend/reinstate, SUPER_ADMIN-only
 role change), AuditLog on every mutation, role-gated /admin frontend section (unchanged
@@ -352,16 +456,16 @@ a seeded real `SUPER_ADMIN` account, an automated test suite per
 docs/TESTING_STRATEGY.md, a unique index on `User.phone`, HTTPS/hosting setup per
 docs/ARCHITECTURE.md's Phase 15, and closing BUG-001). Despite that standing caveat,
 the user has explicitly requested V2 feature work directly (Instagram linking, Task
-#15 — Why-You-Match + Smart Icebreakers, and now Task #17 — Referral program), so V2
-work is actively happening on this branch by explicit request, ahead of the
-MVP-first sequencing principle's default recommendation below. Remaining V2 scope not
-yet done by this session: AI Profile Coach, AI Date Ideas (both would need a real
-Claude API integration — see MOCK_FEATURES.md), Private/Invisible browsing, advanced
-filters, Profile Boost, Priority Like, real Razorpay integration, voice/video calling
-— see docs/ROADMAP.md's V2 section. **No TaskList tool was available in this session
-to check the live task graph before writing this** — Safe Date mode and Date Planner
-(Task #18) may already be done or in progress by concurrent work on this branch;
-check `git log` and any TaskList tooling available to whoever picks this up next for
+#15 — Why-You-Match + Smart Icebreakers, Task #17 — Referral program, and now Task
+#18 — Safe Date mode + Date Planner), so V2 work is actively happening on this branch
+by explicit request, ahead of the MVP-first sequencing principle's default
+recommendation below. Remaining V2 scope not yet done by this session: AI Profile
+Coach, a real-AI version of AI Date Ideas (both would need a real Claude API
+integration — see MOCK_FEATURES.md), Private/Invisible browsing, advanced filters,
+Profile Boost, Priority Like, real Razorpay integration, voice/video calling, real
+Instagram OAuth — see docs/ROADMAP.md's V2 section. **No TaskList tool was available
+in this session to check the live task graph before writing this** — whoever picks
+this up next should check `git log` and any TaskList tooling available to them for
 the authoritative current state rather than trusting this line alone. Absent a
 specific next user-requested V2 item, the "Before real production launch" gaps above
 remain the recommended default next focus, per this project's own MVP-first

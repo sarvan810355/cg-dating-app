@@ -233,6 +233,57 @@ resolved by this pass (this pass was audit/polish/docs, not new feature work —
       same real `hasFeature()` entitlement check as a paid plan) — see
       `docs/DATABASE_SCHEMA.md`'s `referrals` section and
       `docs/API_DOCUMENTATION.md`'s Section 13 for the full writeup.
+- [ ] **Safe Date's "missed check-in" is detected at read-time (computed on GET), not
+      via a real background scheduler or actual SMS/push alert to the trusted
+      contact — that would need a job queue (e.g. node-cron or a proper task queue)
+      plus a real SMS provider, neither of which exist in this project yet.**
+      `[NEW, Task #18, V2 scope, see docs/ROADMAP.md's Phase 12]`.
+      `backend/utils/safeDateUtils.js#computeSafeDateStatus()`/`applySafeDateComputation()`
+      are re-evaluated fresh on **every** `GET /api/safe-dates`/
+      `GET /api/safe-dates/:id` call: a still-`PLANNED` plan is flagged
+      `isOverdue: true` once more than 30 minutes have passed since
+      `plannedStartAt` with no check-in, and is only actually reclassified
+      (persisted) to `status: 'MISSED_CHECKIN'` once more than 120 minutes have
+      passed since `plannedEndAt` with still no check-in. **Nothing watches the
+      clock in the background** — if nobody (not the owner, not anything else with
+      their token) happens to call one of those two GET routes after the grace
+      period passes, the plan just sits there still showing `PLANNED` until the
+      next read. The **pre-date reminder** (`isReminderWindow` becoming true, and
+      the one-time in-app `Notification` created alongside it — reusing
+      `backend/utils/notificationUtils.js#createNotification()`, the same real,
+      non-mocked in-app-notification infrastructure every other trigger point in
+      this codebase uses) has the identical limitation: it only fires if a read
+      happens to land inside the 60-minute window before `plannedStartAt`, not on
+      a guaranteed schedule the way a real push reminder would. And **no one is
+      ever actually contacted if a check-in is missed** — `trustedContactPhone` is
+      stored on the `SafeDate` document purely for the user's own reference (so
+      the UI can show "who would be contacted") and is **never** used to send a
+      real SMS/call to that trusted contact; there is no SMS provider configured
+      in this project at all (same MOCK/DEV-ONLY delivery gap already documented
+      above for mobile-OTP verification). A real implementation of this feature
+      would need: (1) a job queue (`node-cron` or a proper task queue) actually
+      watching plan deadlines rather than waiting for an incidental read, and (2) a
+      real SMS/voice provider (e.g. Twilio/MSG91) to actually reach the trusted
+      contact when a check-in is genuinely missed — neither exists in this
+      project yet. See `docs/DATABASE_SCHEMA.md`'s `safe_dates` section and
+      `docs/API_DOCUMENTATION.md`'s Section 14 for the full writeup. **What IS
+      real and non-mocked:** the plan CRUD itself (create/list/read/check-in/
+      complete/cancel, owner-only access enforcement), the status-computation
+      logic (deterministic, unit-tested), and the reminder `Notification`
+      (a genuine persisted, live-socket-delivered in-app notification once it
+      does fire).
+- [ ] **Date Planner suggestions are a curated static list, not real AI.** `[NEW,
+      Task #18, V2 scope, see docs/ROADMAP.md's Phase 12]`. `GET /api/date-ideas`
+      (`backend/routes/dateIdeas.js`, `backend/utils/datePlanUtils.js`) is plain
+      heuristic filtering over a small in-code list of 10 curated ideas — there is
+      no `ANTHROPIC_API_KEY` configured for this project, same constraint already
+      documented above for Task #15's Icebreakers/Why-You-Match. Nothing is
+      persisted (no `date_plans` collection exists — see
+      `docs/DATABASE_SCHEMA.md`'s divergence note); this is purely a stateless
+      suggestion endpoint. Every curated idea is a **public** place/activity
+      (café, restaurant, park, multiplex, public lake/garden, etc.) per the
+      product spec's explicit safety rule against suggesting isolated/private
+      meeting spots — enforced by hand-curating the list, not a runtime filter.
 
 ## Resolved (mocks replaced with real implementations)
 
