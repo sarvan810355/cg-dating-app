@@ -40,6 +40,19 @@ function toPublicUser(user) {
     // /api/auth/me call frontend/src/context/AuthContext.jsx already makes
     // on every page load — no second "am I an admin" request needed.
     role: user.role,
+    // Task #16 — Profile Boost + Priority Like (V2 scope): exposing both
+    // credit balances here (not just via GET /api/boosts/status) means the
+    // frontend's already-existing AuthContext user object (refreshed on
+    // every login/signup and on-demand via refreshUser()) carries them
+    // everywhere the app already has `user` in scope — the Priority Like
+    // button on Discovery.jsx in particular needs this balance without an
+    // extra network round trip on every card render. Never a client-trusted
+    // claim for entitlement purposes — every credit-consuming route
+    // (POST /api/boosts/activate, POST /api/discovery/swipe) still
+    // re-reads and re-decrements the real database value itself; this is
+    // purely a read-only display convenience, same as `role` above.
+    boostCreditsRemaining: user.boostCreditsRemaining,
+    priorityLikesRemaining: user.priorityLikesRemaining,
     createdAt: user.createdAt,
   };
 }

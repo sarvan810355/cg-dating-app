@@ -14,7 +14,14 @@ function notificationText(n) {
     case 'match':
       return `You have a new match with ${n.payload?.fromUserName || 'someone new'}!`;
     case 'like':
-      return 'Someone liked your profile';
+      // Task #16 — Priority Like (V2 scope): distinguishable copy for a
+      // priority like, driven by the `priority: true` payload flag
+      // (backend/routes/discovery.js's notification-creation comment) — the
+      // ONE non-identity flag this payload is allowed to carry; still never
+      // reveals WHO, only WHAT KIND of like it was.
+      return n.payload?.priority
+        ? '⭐ Someone sent you a Priority Like!'
+        : 'Someone liked your profile';
     case 'message':
       return `New message from ${n.payload?.fromUserName || 'a match'}${
         n.payload?.preview ? `: "${n.payload.preview}"` : ''

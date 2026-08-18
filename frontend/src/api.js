@@ -148,10 +148,14 @@ export function updateProfileLocation(latitude, longitude) {
   return request('/api/profile/me', { method: 'PUT', body: { latitude, longitude }, auth: true });
 }
 
-export function swipe(toUserId, action) {
+// `priority` (Task #16 — Priority Like, V2 scope) is only meaningful
+// alongside `action: 'like'` — omit it (or pass `false`) for an ordinary
+// swipe, exactly as before this task; every existing call site keeps
+// working unchanged.
+export function swipe(toUserId, action, priority) {
   return request('/api/discovery/swipe', {
     method: 'POST',
-    body: { toUserId, action },
+    body: { toUserId, action, ...(priority ? { priority: true } : {}) },
     auth: true,
   });
 }
@@ -418,4 +422,16 @@ export function getDateIdeas({ budget, activityType, city } = {}) {
     method: 'GET',
     auth: true,
   });
+}
+
+// --- Profile Boost + Priority Like (Task #16 — V2 scope, see
+// docs/API_DOCUMENTATION.md's Boost section). Priority Like itself has no
+// dedicated function here — it's the `priority` argument on swipe() above. --
+
+export function getBoostStatus() {
+  return request('/api/boosts/status', { method: 'GET', auth: true });
+}
+
+export function activateBoost() {
+  return request('/api/boosts/activate', { method: 'POST', auth: true });
 }

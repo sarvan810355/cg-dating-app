@@ -55,7 +55,13 @@ export function AuthProvider({ children }) {
     disconnectSocket();
   }
 
-  const value = { user, loading, signup, login, logout };
+  // Task #16 — Profile Boost + Priority Like (V2 scope): exposed so a screen
+  // that just spent a boost/priority-like credit (Discovery.jsx) can pull a
+  // fresh `user.boostCreditsRemaining`/`priorityLikesRemaining` into
+  // AuthContext without a full page reload — same underlying GET
+  // /api/auth/me call this context already makes on mount, just callable
+  // again on demand.
+  const value = { user, loading, signup, login, logout, refreshUser };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

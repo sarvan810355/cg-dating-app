@@ -69,12 +69,19 @@ Base path: `/api/auth`
 - **Request body:** none
 - **Success response:** `200 OK`
   ```json
-  { "user": { "id": "...", "email": "...", "role": "USER", "createdAt": "..." } }
+  { "user": { "id": "...", "email": "...", "role": "USER", "boostCreditsRemaining": 1, "priorityLikesRemaining": 1, "createdAt": "..." } }
   ```
   `role` — `[IMPLEMENTED, Task #11]` — added so the frontend's role-gated `/admin`
   section (`frontend/src/components/AdminRoute.jsx`) can decide whether to show/allow it
   at all using the same call `frontend/src/context/AuthContext.jsx` already makes on
   every page load, with no second "am I an admin" request needed.
+  `boostCreditsRemaining`/`priorityLikesRemaining` — `[NEW, Task #16, V2,
+  user-requested]` — exposed here (not just via `GET /api/boosts/status`) so
+  the frontend's `AuthContext` carries both balances everywhere `user` is
+  already in scope, e.g. the Priority Like button on `Discovery.jsx` — purely
+  a read-only display convenience, never a client-trusted entitlement claim
+  (every credit-consuming route re-reads and re-decrements the real database
+  value itself). See §15's Boost + Priority Like section.
 - **Errors:**
   - `401` — missing/invalid/expired token (from `requireAuth` middleware)
   - `404` — user no longer exists
@@ -335,6 +342,33 @@ server restart resets to the defaults; see that file's own top comment for
 why a full persisted-config collection wasn't built for four numbers in
 this pass.
 
+**`[NEW, Task #16, V2, user-requested]` Two further ranking-layer bonuses —
+Profile Boost + Priority Like:** on top of the four-signal weighted score
+above, two flat, post-blend, **non-weighted** bonuses are added
+(`backend/utils/discoveryRankingUtils.js`):
+- **Boost (`+30`, `BOOST_RANK_BONUS`)** — applied to any candidate with a
+  currently-active (non-expired) `Boost` document. Lifts that candidate's
+  visibility to EVERY viewer at once.
+- **Priority Like (`+25`, `PRIORITY_LIKE_RANK_BONUS`)** — applied only for
+  the ONE specific viewer a candidate has priority-liked and who hasn't yet
+  swiped back. Narrower/cheaper/already-somewhat-targeted, hence the smaller
+  bonus than Boost's broader reach.
+- Both can stack (`+55` total) — two independent, genuinely-earned reasons to
+  rank higher compound rather than cap each other out.
+- Deliberately **additive, not folded into the `~1.0`-summing weighted
+  blend** above, and **not clamped** to the historical 0-100 `rankScore`
+  range — `rankScore` is a pure internal sort key, never returned to the
+  client (only `compatibility` is), so letting it exceed 100 when
+  boosted/priority-liked is harmless. See
+  `backend/utils/discoveryRankingUtils.js`'s top comment above
+  `BOOST_RANK_BONUS` for the full "why additive" reasoning.
+- **Never bypasses eligibility** — both bonuses are resolved via one bulk
+  query each (`getActiveBoostedUserIds()`, and a single indexed `Like.find()`
+  for pending priority-likers) against the pool's user ids AFTER layer 1's
+  eligibility filtering has already produced `eligiblePool` — a Boost/
+  Priority Like can reorder within that pool, never add to or remove from
+  it. See §15 (Boost + Priority Like) for the full route contract.
+
 **Candidate pool, and how ranking composes with pagination
 (`backend/constants/discoveryOptions.js#RANKING_POOL_SIZE = 150`):** rather
 than scoring the entire eligible user base on every request (explicitly
@@ -459,10 +493,25 @@ number.
   (`{ "message": "Create your profile before browsing discovery" }`); `401`; `500`.
 
 ### `POST /api/discovery/swipe`
-- **Request body:** `{ "toUserId": "<userId>", "action": "like" | "pass" }`
+- **Request body:** `{ "toUserId": "<userId>", "action": "like" | "pass", "priority"?: boolean }`
 - Records the swipe; if `action` is `"like"` and the other user already liked the
   caller back, also creates a `match` (see the Matching section below) — this is
   the only path a match is ever created from.
+- **`priority` — `[NEW, Task #16, V2, user-requested]`** optional, only
+  meaningful alongside `action: "like"` ("Super Like" equivalent — see §15's
+  Boost + Priority Like section). `priority: true` on a `"pass"` is rejected
+  outright (`400`) rather than silently downgraded; a non-boolean `priority`
+  value is also `400`. When `true` and accepted, consumes one
+  `users.priorityLikesRemaining` credit — a SEPARATE, non-resetting credit
+  from the daily like quota, checked/consumed AFTER the daily-quota check
+  (below) but before `Like.create()`. Out of priority-like credits → `402
+  Payment Required`, `{ "message": "...", "upgradeRequired": true,
+  "priorityLikesRemaining": 0 }` (deliberately `402`, not `429` — a spent,
+  non-resetting credit is a genuinely different situation from a quota that
+  resets tomorrow). A successful priority like also gets a ranking bonus for
+  its recipient's feed (see §3's ranking section) and a distinguishing (not
+  identity-revealing) `"Someone sent you a Priority Like!"` notification
+  instead of the generic like notification.
 - **Validation:** `toUserId` must be a valid id and cannot be the caller's own id;
   both the caller and the target must already have a profile (18+ is already a
   hard requirement enforced at profile creation/update time — see the Profile
@@ -489,7 +538,9 @@ number.
   resets (or after upgrading) without having "used up" the attempt. Bypassed
   entirely for a caller with the `unlimited_likes` plan feature.
 - **Success response:** `201 Created` —
-  `{ "like": { "id", "fromUserId", "toUserId", "action", "createdAt" }, "matchCreated": true|false, "match": { "id", "users", "matchedAt" } | null }`
+  `{ "like": { "id", "fromUserId", "toUserId", "action", "priority", "createdAt" }, "matchCreated": true|false, "match": { "id", "users", "matchedAt" } | null }`
+  (`priority` — `[NEW, Task #16]` — always `false` for a `"pass"` or an
+  ordinary like.)
 - **Errors:** `400` — invalid `toUserId`/`action`, or swiping on yourself; `404` —
   caller or target has no profile; `409` — see above; `429` — daily like limit
   reached, see above; `401`; `500`.
@@ -1096,7 +1147,17 @@ mounted at the bare `/api` root in `backend/server.js`. There is no
 - `POST /api/subscription/subscribe` — auth required — body
   `{ "planCode": "CG_PLUS" | "CG_PRO" | "CG_ELITE" }`. Creates a new
   `ACTIVE` `Subscription` with `expiresAt = now + billingPeriod`. Returns
-  `201 { message, subscription }`.
+  `201 { message, subscription, creditsGranted: { boostCredits, priorityLikes } }`.
+  `creditsGranted` — `[NEW, Task #16, V2, user-requested]` — a one-time,
+  additive top-up of `users.boostCreditsRemaining`/`priorityLikesRemaining`
+  by whatever the plan grants (`Plan.boostCreditsGranted`/
+  `priorityLikesGranted` — see `docs/DATABASE_SCHEMA.md`'s `plans` section
+  for the exact seeded amounts per tier), surfaced here so the frontend can
+  show e.g. "+3 Boost credits, +8 Priority Likes added" without a separate
+  call. Isolated in its own try/catch server-side — a grant failure never
+  turns a successful subscribe into an error response, since the
+  `Subscription` itself is already committed by that point. See §15's Boost
+  + Priority Like section.
 
   > ## ⚠️ MOCK / TEMPORARY — NOT REAL PAYMENT PROCESSING
   > There is **no real Razorpay integration** behind this endpoint — no
@@ -1677,4 +1738,97 @@ alert" explanation reproduced in condensed form below.
     "budget": null, "activityType": null, "city": null
   }
   ```
+
+## 15. Profile Boost + Priority Like — `[IMPLEMENTED, Task #16, V2 scope — the last currently-queued V2 item, added 2026-08-18]`
+
+Two consumable-credit premium mechanics: a Profile Boost (time-limited
+visibility spike, seen by everyone) and a Priority Like ("Super Like"
+equivalent, targeted at one recipient). Implemented in
+`backend/models/Boost.js`, `backend/constants/boostOptions.js`,
+`backend/routes/boosts.js` (Boost only — Priority Like has no dedicated
+router; it's an extension of `POST /api/discovery/swipe`, see §3), ranking
+integration in `backend/utils/discoveryRankingUtils.js` (see §3's ranking
+section above), entitlement logic in `backend/utils/entitlementUtils.js`.
+
+**Credits:** every new signup gets **1 free Boost credit + 1 free Priority
+Like credit** (`users.boostCreditsRemaining`/`priorityLikesRemaining`,
+schema default `1`, `min: 0` — see `docs/DATABASE_SCHEMA.md`'s `users`
+section) as a taster of both mechanics. A plan subscription tops both up
+further, additively, one time, on `POST /api/subscription/subscribe` (see §9
+above) — CG Plus +1 Boost / +3 Priority Likes, CG Pro +3 Boost / +8 Priority
+Likes, CG Elite +5 Boost / +15 Priority Likes (seeded amounts, admin-editable
+— see `docs/DATABASE_SCHEMA.md`'s `plans` section). Both credit-consumption
+paths (`tryActivateBoost()`/`tryConsumePriorityLike()` in
+`entitlementUtils.js`) only ever decrement after confirming a remaining
+balance `> 0` — a balance can never go negative — and a currently-active
+Boost is checked FIRST on activation so a double-activate attempt never
+consumes a credit it shouldn't.
+
+### `GET /api/boosts/status`
+- **Auth:** required.
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "active": true,
+    "boost": { "id", "startedAt", "expiresAt", "source", "remainingSeconds" } | null,
+    "boostCreditsRemaining": 0,
+    "boostDurationMinutes": 30
+  }
+  ```
+  Always a fresh DB read — a Boost's "active" status is never cached on the
+  JWT/session. `remainingSeconds` is server-computed so the frontend never
+  does its own date math against a raw `expiresAt` (same convention as Safe
+  Date's `isOverdue`/`isReminderWindow`, §14).
+
+### `POST /api/boosts/activate`
+- **Auth:** required, no body.
+- Activates a **30-minute** (`BOOST_DURATION_MINUTES`) Profile Boost,
+  consuming one `boostCreditsRemaining` credit. `expiresAt` is always
+  `startedAt + 30 minutes`, computed once at activation — never
+  extended/renewed by a later call.
+- **Success response:** `201 Created` — same shape as `GET /api/boosts/status`.
+- **Errors:**
+  - `409 Conflict` — already have an active (non-expired) Boost. No credit is
+    consumed.
+  - `402 Payment Required` — no Boost credits remaining —
+    `{ "message": "...", "upgradeRequired": true, "boostCreditsRemaining": 0 }`
+    (deliberately `402`, not `429` — a spent credit doesn't reset on its own,
+    unlike a daily quota).
+  - `401`; `500`.
+
+### Ranking effect
+See §3's "Two further ranking-layer bonuses" subsection above for the full
+mechanism: a currently-active Boost adds a flat `+30` to a candidate's
+`rankScore` for every viewer; a pending Priority Like adds a flat `+25`,
+targeted to the one viewer who was priority-liked. Both stack (`+55`). Never
+bypasses Task #14's eligibility filtering — a boosted or priority-liking
+candidate can rank higher within the already-eligible pool, never appear
+outside it.
+
+### Priority Like — extension of `POST /api/discovery/swipe`
+See §3's swipe route documentation above for the full `priority: true`
+request/response/error contract (credit consumption, `402` on exhaustion,
+`400` on `priority: true` + `action: 'pass'`). A successful priority like
+also triggers a distinguishing (not identity-revealing) notification —
+`type: 'like'` with payload `{ "priority": true }` — rendered by the
+frontend as **"Someone sent you a Priority Like!"** instead of the generic
+"Someone liked your profile" copy (`frontend/src/components/NotificationBell.jsx`).
+A priority like that also completes a mutual match takes the existing
+`match`-notification path instead (which already reveals full identity, so
+there's nothing left for the priority flag to add).
+
+### Honestly scoped — see `MOCK_FEATURES.md`
+- Credit grants on subscribe are **one-time, not recurring** — no job
+  scheduler exists in this codebase to re-grant on renewal.
+- `Boost.source` records how *this activation* was initiated, not
+  necessarily how the specific credit it consumed was originally granted —
+  credits are a single fungible pool, not tracked with per-credit
+  provenance. The only activation path built in this pass
+  (`POST /api/boosts/activate`) always records `'purchased'`;
+  `'subscription_perk'`/`'referral_reward'` remain reserved enum values for
+  a future *automatic* activation path, not built in this pass.
+- Both mechanics ride on top of §9's already-mocked Razorpay checkout — a
+  free-tier user who wants more than their one free credit of each still has
+  to go through the mock (no real payment collected) subscribe flow to get
+  plan-granted top-ups.
 - **Errors:** `400` — `budget`/`activityType` not one of the allowed values; `401`; `500`.

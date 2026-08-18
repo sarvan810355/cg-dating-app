@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const Plan = require('../models/Plan');
 const Subscription = require('../models/Subscription');
 const { requireAuth } = require('../middleware/auth');
-const { getEffectiveSubscription } = require('../utils/entitlementUtils');
+const { getEffectiveSubscription, grantPlanCredits } = require('../utils/entitlementUtils');
 const { toPlanJSON, toSubscriptionJSON } = require('../utils/subscriptionSerializers');
 const {
   PLAN_CODES,
@@ -95,9 +95,34 @@ router.post('/subscription/subscribe', requireAuth, async (req, res) => {
     });
     await subscription.populate('plan');
 
+    // Task #16 — Profile Boost + Priority Like (V2 scope): a ONE-TIME
+    // credit top-up on subscribe, additive to whatever balance the caller
+    // already had (see backend/utils/entitlementUtils.js#grantPlanCredits()'s
+    // own comment for the full "why one-time, not recurring" writeup —
+    // there is no job scheduler in this codebase to re-grant on renewal).
+    // Isolated in its own try/catch, same "a side-effect failure never
+    // turns a successful subscribe into an error response" pattern already
+    // used for notification creation in backend/routes/discovery.js's POST
+    // /swipe — the Subscription itself is already committed above by the
+    // time this runs.
+    let creditsGranted = { boostGrant: 0, priorityGrant: 0 };
+    try {
+      creditsGranted = await grantPlanCredits(req.user.id, plan, now);
+    } catch (grantErr) {
+      console.error('Plan credit grant error (subscribe):', grantErr);
+    }
+
     return res.status(201).json({
       message: 'Subscription activated (mock checkout — no real payment was processed)',
       subscription: toSubscriptionJSON(subscription),
+      // Surfaced so the frontend can show "+3 Boost credits, +8 Priority
+      // Likes added" on a successful upgrade rather than the caller having
+      // to separately call GET /api/boosts/status / GET /api/auth/me to
+      // notice their balance changed.
+      creditsGranted: {
+        boostCredits: creditsGranted.boostGrant,
+        priorityLikes: creditsGranted.priorityGrant,
+      },
     });
   } catch (err) {
     console.error('Subscribe error:', err);

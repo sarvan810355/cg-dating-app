@@ -78,6 +78,23 @@ Core account/auth record.
   codebase ever attempts to write to it after creation anyway (referral
   linking only ever happens inline in the signup handler). See the
   `referrals` section below.
+- `boostCreditsRemaining`, `priorityLikesRemaining` — `[IMPLEMENTED, Task #16,
+  V2, user-requested, added 2026-08-18]` Number, default `1` each, `min: 0`.
+  Simple fungible consumable-credit counters (same "1:1-with-user,
+  always-fetched-together account state" pattern as `dailyLikeCount` above),
+  **not** source-tracked per credit — see `backend/constants/boostOptions.js`'s
+  `BOOST_SOURCES` comment. Every new signup gets one free credit of each as a
+  taster of both premium mechanics (`FREE_BOOST_CREDITS`/`FREE_PRIORITY_LIKES`
+  in `backend/constants/boostOptions.js`); a plan subscription tops both up
+  further, additively, one time, on `POST /api/subscription/subscribe` (see
+  the `plans` section below and `backend/utils/entitlementUtils.js#grantPlanCredits()`).
+  `min: 0` is a schema-level backstop — the actual "can never go negative"
+  guarantee is enforced in `backend/utils/entitlementUtils.js`'s
+  `tryActivateBoost()`/`tryConsumePriorityLike()`, which only ever decrement
+  after confirming a remaining balance `> 0`. Also surfaced on
+  `GET /api/auth/me` (not just `GET /api/boosts/status`) so the frontend's
+  `AuthContext` carries the balance everywhere `user` is already in scope —
+  see `docs/API_DOCUMENTATION.md`'s Boost section.
 - `createdAt`, `updatedAt`, `lastLoginAt` — stamped on every successful
   `POST /api/auth/login` (`backend/routes/auth.js`). **`[REUSED, Task #19,
   V2, user-requested]`** — this is also the ONLY genuine "last active"
@@ -291,12 +308,30 @@ never re-shown once decided on).
   **Divergence from the original draft:** fields renamed `fromUserId`/`toUserId`
   → `fromUser`/`toUser` (matches the `Profile.user` ref-naming convention already
   in the codebase) and `type` → `action`; the enum is `like`/`pass` (lowercase,
-  two values) rather than `LIKE`/`SUPER_LIKE`/`PASS` — `SUPER_LIKE` is out of
-  scope for this MVP pass and can be added as a third `action` value later
-  without a schema shape change.
+  two values) rather than `LIKE`/`SUPER_LIKE`/`PASS`.
+- `priority` — `[IMPLEMENTED, Task #16, V2, user-requested, added 2026-08-18]`
+  Boolean, default `false` — the "Super Like" equivalent the original draft's
+  `SUPER_LIKE` action value was reserved for, above, implemented instead as a
+  boolean flag on the existing `like` action rather than a third `action`
+  enum value: a priority like IS a like (same mutual-match detection, same
+  "don't re-show this candidate" exclusion, same daily-like-quota
+  consumption), just one that additionally consumed a separate
+  `users.priorityLikesRemaining` credit (`backend/utils/entitlementUtils.js#tryConsumePriorityLike()`)
+  and carries an extra ranking bonus + distinct notification copy — modeling
+  it as a distinct `action` would have meant duplicating every
+  `action === 'like'` check across `discovery.js`/`matchUtils.js` for what is
+  fundamentally still a like. Only ever `true` alongside `action: 'like'`
+  (enforced at the route layer, `POST /api/discovery/swipe` — `priority: true`
+  on a `pass` is rejected outright with a `400`, never silently downgraded).
+  Every pre-existing Like document reads as a correct, ordinary
+  (non-priority) like via the `false` default, no migration needed.
 - Indexes: unique compound on `(fromUser, toUser)` — this is both the "no
   duplicate swipe" integrity constraint and the lookup used for mutual-like
   detection; compound index on `(toUser, action)` for "who liked me" lookups.
+  The discovery feed's priority-like ranking bonus additionally queries
+  `(fromUser: $in pool, toUser: me, action: 'like', priority: true)` — no new
+  index added for this in this pass (the compound `(toUser, action)` index
+  already narrows it usefully; `fromUser`'s own index narrows further).
 
 ### `matches` — `[IMPLEMENTED]`
 Implemented in `backend/models/Match.js`; routes in `backend/routes/matches.js`
@@ -344,6 +379,16 @@ Implemented in `backend/models/Match.js`; routes in `backend/routes/matches.js`
   **No new persisted field or collection was added for ranking itself** — like
   compatibility, `rankScore` is always computed live per request, over a bounded
   candidate pool, never stored.
+- **`[NEW, Task #16, V2, user-requested]` Profile Boost + Priority Like add two
+  further flat, post-blend, non-weighted bonuses on top of the same
+  `rankScore`** — `+30` (`BOOST_RANK_BONUS`) for a candidate with a
+  currently-active `Boost` document, `+25` (`PRIORITY_LIKE_RANK_BONUS`) for a
+  candidate who has priority-liked THIS specific viewer and not yet been
+  swiped on back — both can stack (`+55` total). Deliberately additive rather
+  than folded into the four admin-tunable weights above (which must sum to
+  `~1.0`) — see `backend/utils/discoveryRankingUtils.js`'s top comment above
+  `BOOST_RANK_BONUS` for the full reasoning, and the `boosts` section below /
+  `docs/API_DOCUMENTATION.md`'s Boost section for the full route contract.
 
 ### `discovery_ranking_config` — **not implemented as a persisted collection**
 **`[NEW, Task #19, V2, user-requested]`** The four ranking weights
@@ -647,6 +692,22 @@ change.
   `billingPeriod` (`monthly`, `yearly`), `features` (array of strings, e.g.
   `unlimited_likes`, `advanced_filters`, `see_who_liked_you`, `boost`,
   `incognito`), `isActive` (bool)
+- `boostCreditsGranted`, `priorityLikesGranted` — `[IMPLEMENTED, Task #16, V2,
+  user-requested, added 2026-08-18]` Number, default `0`, `min: 0`. How many
+  `boosts`/priority-like credits a subscriber is granted, ONE TIME, the
+  moment they subscribe to this plan (`POST /api/subscription/subscribe` —
+  see `backend/utils/entitlementUtils.js#grantPlanCredits()`). Additive to
+  `users.boostCreditsRemaining`/`priorityLikesRemaining`, never a
+  replacement — resubscribing/upgrading never claws back an unused balance.
+  **Honestly scoped: a ONE-TIME grant on subscribe, not a recurring monthly
+  top-up** — there is no job scheduler anywhere in this codebase (no
+  `node-cron`, no task queue) to grant a fresh batch on renewal; see
+  `MOCK_FEATURES.md`'s Task #16 entry. Seed values (escalating per tier, see
+  `backend/constants/subscriptionOptions.js#DEFAULT_PLANS`): CG Plus +1
+  boost / +3 priority likes, CG Pro +3 boost / +8 priority likes, CG Elite +5
+  boost / +15 priority likes — arbitrary but deliberately escalating MVP
+  placeholder numbers, admin-editable after seeding like every other `Plan`
+  field.
 - Indexes: unique on `code`.
 - Seeding: the three default plans are seeded **idempotently at server
   startup** (`backend/utils/entitlementUtils.js#seedDefaultPlans()`, called
@@ -703,7 +764,44 @@ never a client-reported "payment succeeded" call. See `MOCK_FEATURES.md`'s
 Razorpay entry and `docs/API_DOCUMENTATION.md`'s Subscription section for
 the full mock-checkout explanation.
 
-### `boosts` — **not implemented** (Profile Boost is `PLAN_FEATURES`-listed but not yet enforced anywhere — see `docs/DATABASE_SCHEMA.md`'s `plans` section and `MOCK_FEATURES.md`)
+### `boosts` — `[IMPLEMENTED, Task #16, V2, user-requested, added 2026-08-18]`
+Implemented in `backend/models/Boost.js`; routes in `backend/routes/boosts.js`.
+One document per activation — **not** a single mutable "current boost" field
+on `users` — so a user's past boosts stay queryable (e.g. a future "boost
+history" screen) even after they expire; "does this user currently have an
+active boost" is always derived by querying for a not-yet-expired row rather
+than trusting a cached flag.
+- `_id`, `user` (ref `users`, indexed), `startedAt` (default `Date.now`),
+  `expiresAt` (required, indexed — always `startedAt + 30 minutes`,
+  `BOOST_DURATION_MINUTES` in `backend/constants/boostOptions.js`, computed
+  once at activation and never extended/renewed by a later call — activating
+  while already active is rejected outright with a `409`), `source` — enum:
+  `subscription_perk`, `purchased`, `referral_reward` (only `createdAt`
+  timestamp, no `updatedAt` — a point-in-time event, never edited in place).
+  **`source` records how *this activation* was initiated, not necessarily how
+  the specific credit it consumed was originally granted** — boost credits
+  are a single fungible counter (`users.boostCreditsRemaining`), not tracked
+  with per-credit provenance. The only activation path built in this pass
+  (`POST /api/boosts/activate`) always records `'purchased'` (a user spending
+  from their own credit balance, whatever its origin); `'subscription_perk'`/
+  `'referral_reward'` remain valid enum values reserved for a future
+  *automatic* activation path not built in this pass — see
+  `MOCK_FEATURES.md`.
+- Indexes: compound `(user, expiresAt desc)` — "does this user have an active
+  boost" / "what's their current boost's remaining time", queried by both
+  `GET /api/boosts/status` and the can't-double-activate check on
+  `POST /api/boosts/activate`.
+- **Ranking effect (not an eligibility effect):** a candidate with any
+  currently-active boost gets a flat `+30` bonus (`BOOST_RANK_BONUS`,
+  `backend/utils/discoveryRankingUtils.js`) added on top of the existing
+  four-signal weighted `rankScore` used by `GET /api/discovery/feed` — see
+  `docs/API_DOCUMENTATION.md`'s Discovery section and Boost section for the
+  full mechanism/magnitude writeup. This bonus can never surface an
+  otherwise-ineligible candidate; it only reorders the already
+  eligibility-filtered pool.
+- No new persisted field or collection tracks Priority Like's ranking
+  effect — see the `likes` section's `priority` field above and
+  `docs/API_DOCUMENTATION.md`'s Boost section.
 
 ### `events`
 (V3 — CG Connect local events)

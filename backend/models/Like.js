@@ -21,6 +21,26 @@ const LikeSchema = new mongoose.Schema(
       enum: SWIPE_ACTIONS,
       required: true,
     },
+    // --- Task #16 — Priority Like (V2 scope, "Super Like" equivalent). Only
+    // ever `true` when `action === 'like'` (a 'pass' can never be priority —
+    // enforced at the route layer, backend/routes/discovery.js's POST
+    // /swipe, not the schema, since a boolean field can't express "only
+    // valid alongside this other field's specific value" on its own).
+    // Chosen as a boolean flag on the existing Like document rather than a
+    // third `action` enum value ('priority_like') — a priority like IS a
+    // like (same mutual-match detection, same "don't re-show this
+    // candidate" exclusion rule, same daily-like-quota consumption) that
+    // additionally consumes a separate `priorityLikesRemaining` credit and
+    // carries an extra ranking/notification effect; modeling it as a
+    // distinct `action` value would have meant duplicating every "action
+    // === 'like'" check across discovery.js/matchUtils.js for what is
+    // fundamentally still a like. Defaults to `false` so every
+    // already-recorded Like from before this task reads as a correct,
+    // ordinary (non-priority) like with no migration needed.
+    priority: {
+      type: Boolean,
+      default: false,
+    },
   },
   // Only createdAt is meaningful here — a swipe is a point-in-time decision,
   // never edited in place (see backend/routes/discovery.js for how a repeat

@@ -60,6 +60,31 @@ const PlanSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    // --- Task #16 — Profile Boost + Priority Like (V2 scope). How many
+    // boost/priority-like credits a subscriber is granted, ONE TIME, the
+    // moment they subscribe to this plan (backend/routes/subscription.js's
+    // POST /subscribe — see backend/utils/entitlementUtils.js#grantPlanCredits()).
+    // Additive to `users.boostCreditsRemaining`/`priorityLikesRemaining`,
+    // never a replacement — resubscribing/upgrading never claws back an
+    // unused balance. **Honestly scoped:** this is a ONE-TIME grant on
+    // subscribe, not a recurring monthly top-up — there is no job
+    // scheduler anywhere in this codebase (no node-cron, no task queue,
+    // same gap already documented for Safe Date's read-time-only reminder
+    // computation) to grant a fresh batch on each renewal; see
+    // MOCK_FEATURES.md's Task #16 entry for the full "why not recurring
+    // yet" writeup. Defaults to 0 (a free/legacy plan grants nothing) so
+    // this never silently applies to a plan an admin didn't explicitly
+    // configure. ---
+    boostCreditsGranted: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    priorityLikesGranted: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
   },
   { timestamps: true }
 );

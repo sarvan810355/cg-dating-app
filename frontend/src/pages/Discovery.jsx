@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import * as api from '../api';
 import Button from '../components/Button';
@@ -7,6 +7,7 @@ import MatchModal from '../components/MatchModal';
 import NotificationBell from '../components/NotificationBell';
 import SafetyMenu from '../components/SafetyMenu';
 import VerificationBadge from '../components/VerificationBadge';
+import { useAuth } from '../context/AuthContext';
 import { DATING_INTENTIONS } from '../constants/profileOptions';
 import { MAX_DISTANCE_KM_CAP } from '../constants/discoveryOptions';
 
@@ -121,6 +122,131 @@ function DiscoveryCard({ profile, onBlocked }) {
   );
 }
 
+function formatCountdown(totalSeconds) {
+  const m = Math.floor(totalSeconds / 60);
+  const s = totalSeconds % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+// Task #16 — Profile Boost (V2 scope): credit balance + "Activate Boost"
+// button + a live countdown while active. Small, self-contained (fetches
+// its own status independently of the discovery queue below it) — same
+// "own loading/error state, funnels through the shared api.js request()
+// helper" pattern every other screen in this codebase already follows.
+function BoostPanel() {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [activating, setActivating] = useState(false);
+  const [error, setError] = useState('');
+  const [remainingSeconds, setRemainingSeconds] = useState(0);
+  const tickRef = useRef(null);
+
+  const loadStatus = useCallback(async () => {
+    try {
+      const data = await api.getBoostStatus();
+      setStatus(data);
+      setRemainingSeconds(data.boost?.remainingSeconds || 0);
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Could not load boost status');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadStatus();
+  }, [loadStatus]);
+
+  // Live countdown while a boost is active — ticks down client-side (no
+  // per-second network calls), and re-fetches real status once it reaches
+  // 0 so "active" flips back to false from the actual server state rather
+  // than an assumption.
+  useEffect(() => {
+    if (!status?.active || remainingSeconds <= 0) {
+      if (tickRef.current) clearInterval(tickRef.current);
+      return undefined;
+    }
+    tickRef.current = setInterval(() => {
+      setRemainingSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(tickRef.current);
+          loadStatus();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(tickRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status?.active]);
+
+  async function handleActivate() {
+    setActivating(true);
+    setError('');
+    try {
+      const data = await api.activateBoost();
+      setStatus(data);
+      setRemainingSeconds(data.boost?.remainingSeconds || 0);
+    } catch (err) {
+      // 402 { upgradeRequired: true } (no credits) and 409 (already active,
+      // see backend/routes/boosts.js) both still carry the freshest status
+      // fields on `err.data` — reuse them so the panel stays accurate
+      // instead of just showing an error string.
+      if (err.data?.active !== undefined || err.data?.boostCreditsRemaining !== undefined) {
+        setStatus((prev) => ({ ...prev, ...err.data }));
+        if (err.data.boost?.remainingSeconds !== undefined) {
+          setRemainingSeconds(err.data.boost.remainingSeconds);
+        }
+      }
+      setError(err.message || 'Could not activate boost');
+    } finally {
+      setActivating(false);
+    }
+  }
+
+  if (loading) return null;
+
+  const credits = status?.boostCreditsRemaining ?? 0;
+
+  return (
+    <div className="mb-4 rounded-2xl border border-border bg-surface p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-text-primary">🚀 Profile Boost</p>
+          {status?.active ? (
+            <p className="mt-0.5 text-xs text-success">
+              Active — you&rsquo;re getting extra visibility for {formatCountdown(remainingSeconds)}
+            </p>
+          ) : (
+            <p className="mt-0.5 text-xs text-text-secondary">
+              {credits > 0
+                ? `${credits} boost${credits === 1 ? '' : 's'} available · 30 min of extra visibility`
+                : 'No boosts left'}
+            </p>
+          )}
+        </div>
+        {status?.active ? (
+          <span className="rounded-full bg-success/10 px-3 py-1.5 text-xs font-medium text-success">
+            Boosted
+          </span>
+        ) : credits > 0 ? (
+          <Button className="shrink-0 text-xs" loading={activating} onClick={handleActivate}>
+            Activate
+          </Button>
+        ) : (
+          <Link to="/subscription" className="shrink-0">
+            <Button variant="secondary" className="text-xs">
+              Get boosts
+            </Button>
+          </Link>
+        )}
+      </div>
+      {error && <p className="mt-2 text-xs text-error">{error}</p>}
+    </div>
+  );
+}
+
 function Discovery() {
   const [queue, setQueue] = useState([]);
   const [page, setPage] = useState(0);
@@ -134,6 +260,15 @@ function Discovery() {
   // see docs/BUSINESS_PLAN.md). Shown as a friendly upgrade prompt instead
   // of a raw error message.
   const [limitReached, setLimitReached] = useState(false);
+  // Task #16 — Priority Like (V2 scope): set when POST /api/discovery/swipe
+  // returns 402 { upgradeRequired: true } (priorityLikesRemaining exhausted)
+  // — a distinct banner from `limitReached` above since it's a genuinely
+  // different situation (a spent, non-resetting credit vs. a quota that
+  // resets tomorrow — see backend/routes/discovery.js's swipe route
+  // comment).
+  const [priorityLikesExhausted, setPriorityLikesExhausted] = useState(false);
+  const { user, refreshUser } = useAuth();
+  const priorityLikesRemaining = user?.priorityLikesRemaining ?? 0;
   // Task #14 — one-off "search wider" override (V2, user-requested: location
   // preference filtering). Does NOT persist to the caller's saved
   // preferences (PUT /api/profile/me) — it's a per-request query-param
@@ -214,14 +349,21 @@ function Discovery() {
     setQueue((prev) => prev.filter((p) => p.userId !== blockedUserId));
   }
 
-  async function handleSwipe(action) {
+  async function handleSwipe(action, priority = false) {
     if (!current || swiping) return;
     setSwiping(true);
     setError('');
     setLimitReached(false);
+    setPriorityLikesExhausted(false);
     try {
-      const data = await api.swipe(current.userId, action);
+      const data = await api.swipe(current.userId, action, priority);
       setQueue((prev) => prev.slice(1));
+      if (priority) {
+        // Task #16 — the credit was consumed server-side; pull a fresh
+        // balance into AuthContext so the button's remaining-count badge
+        // stays accurate without a full page reload.
+        refreshUser();
+      }
       if (data.matchCreated) {
         // Carry the new match's id along so MatchModal's "Start a
         // conversation" CTA (Task #5) can route straight into the real
@@ -238,6 +380,13 @@ function Discovery() {
       // e.g. after upgrading — without losing their place.
       if (err.status === 429 && err.data?.upgradeRequired) {
         setLimitReached(true);
+      } else if (err.status === 402 && err.data?.upgradeRequired) {
+        // Task #16 — Priority Like credits exhausted (see
+        // backend/routes/discovery.js's POST /swipe comment on why this is
+        // 402, not 429). The card also stays in the queue — the caller can
+        // still send an ordinary Like on it.
+        setPriorityLikesExhausted(true);
+        refreshUser();
       } else if (/already swiped/i.test(err.message || '')) {
         // A 409 "already swiped" shouldn't normally happen from this UI
         // (the card is removed from the queue right after a successful
@@ -268,8 +417,35 @@ function Discovery() {
           </div>
         </div>
 
+        <BoostPanel />
+
         {error && (
           <p className="mb-4 rounded-lg bg-error-subtle px-3 py-2 text-sm text-error">{error}</p>
+        )}
+
+        {priorityLikesExhausted && (
+          <div className="mb-4 rounded-lg border border-primary/30 bg-primary-subtle px-4 py-3">
+            <p className="text-sm font-medium text-text-primary">
+              You&rsquo;re out of Priority Likes
+            </p>
+            <p className="mt-0.5 text-xs text-text-secondary">
+              Upgrade for more Priority Likes, or send a regular Like instead.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <Link to="/subscription">
+                <Button className="text-xs" onClick={() => setPriorityLikesExhausted(false)}>
+                  Upgrade
+                </Button>
+              </Link>
+              <Button
+                variant="ghost"
+                className="text-xs"
+                onClick={() => setPriorityLikesExhausted(false)}
+              >
+                Dismiss
+              </Button>
+            </div>
+          </div>
         )}
 
         {limitReached && (
@@ -304,23 +480,56 @@ function Discovery() {
         {!loading && current && (
           <>
             <DiscoveryCard profile={current} onBlocked={handleBlocked} />
-            <div className="mt-5 flex justify-center gap-4">
+            <div className="mt-5 flex justify-center gap-3">
               <Button
                 variant="secondary"
-                className="rounded-full! px-8! py-3! text-base"
+                className="rounded-full! px-6! py-3! text-base"
                 disabled={swiping}
                 onClick={() => handleSwipe('pass')}
               >
                 Pass
               </Button>
               <Button
-                className="rounded-full! px-8! py-3! text-base"
+                className="rounded-full! px-6! py-3! text-base"
                 disabled={swiping}
                 onClick={() => handleSwipe('like')}
               >
                 Like
               </Button>
+              {/* Task #16 — Priority Like ("Super Like" equivalent, V2
+                  scope). A distinct action from the ordinary Like button
+                  above — sends `priority: true` (see api.js#swipe()),
+                  consumes a separate priorityLikesRemaining credit
+                  (backend/routes/discovery.js's POST /swipe), and ranks the
+                  liker higher specifically in THIS recipient's own feed
+                  (backend/utils/discoveryRankingUtils.js's
+                  PRIORITY_LIKE_RANK_BONUS). Disabled at 0 remaining rather
+                  than hidden — same "still visible, disabled, with an
+                  upsell hint" convention already used for the Boost
+                  panel's "Get boosts" state above and Subscription's
+                  disabled "Active" plan button. */}
+              <Button
+                variant={priorityLikesRemaining > 0 ? 'primary' : 'secondary'}
+                className="rounded-full! px-4! py-3! text-base"
+                disabled={swiping || priorityLikesRemaining <= 0}
+                title={
+                  priorityLikesRemaining > 0
+                    ? `Send a Priority Like (${priorityLikesRemaining} left)`
+                    : 'Out of Priority Likes — upgrade for more'
+                }
+                onClick={() => handleSwipe('like', true)}
+              >
+                ⭐ {priorityLikesRemaining}
+              </Button>
             </div>
+            {priorityLikesRemaining <= 0 && (
+              <p className="mt-2 text-center text-xs text-text-secondary">
+                Out of Priority Likes —{' '}
+                <Link to="/subscription" className="font-medium text-primary hover:underline">
+                  upgrade for more
+                </Link>
+              </p>
+            )}
           </>
         )}
 

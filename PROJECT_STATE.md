@@ -6,14 +6,63 @@ explicit user request: Instagram profile linking (self-reported handle, not OAut
 Why-You-Match + Smart Icebreakers (Task #15, deterministic heuristics, not real AI),
 a Referral program / "Invite & Earn" (Task #17), Safe Date mode + Date Planner
 (Task #18), Location/age match preferences + advanced discovery filters + Private
-browsing (Task #14), and now a weighted ranking/recommendation algorithm for the
-discovery feed (Task #19 — see "Current Task" below and MOCK_FEATURES.md). Other V2
-work (Boost/Priority Like, etc.) may be in progress concurrently on this branch — check
-`git log` for the true current state rather than trusting this narrative alone.
+browsing (Task #14), a weighted ranking/recommendation algorithm for the
+discovery feed (Task #19), and now Profile Boost + Priority Like (Task #16 — see
+"Current Task" below and MOCK_FEATURES.md). **Task #16 is, as of this pass, the
+last currently-queued item from this user's post-MVP V2 feature-request batch** —
+see "Next Exact Task" below.
 Phases 13/14/15 (Testing, full Security Hardening, Deployment) remain cross-cutting
 work not yet started — see "Remaining Features" below and docs/ROADMAP.md.
-Current Task: **V2 feature, user-requested: Task #19 — a weighted
-ranking/recommendation algorithm for the discovery feed**, added 2026-08-18
+Current Task: **V2 feature, user-requested: Task #16 — Profile Boost + Priority
+Like**, added 2026-08-18. This pass's implementation was originally started by an
+earlier agent session that crashed on a transient connection error mid-task
+(unrelated to the code itself — its last message correctly diagnosed a
+verification-script mock-fidelity gap, not a real bug); this session picked the
+already-substantially-complete uncommitted working tree back up, verified it end
+to end, and committed it. Two consumable-credit premium mechanics: a **Profile
+Boost** — a 30-minute (`BOOST_DURATION_MINUTES`, `backend/constants/boostOptions.js`)
+visibility spike, new `Boost` model (`backend/models/Boost.js`, one document per
+activation, never a mutable "current boost" field), new `backend/routes/boosts.js`
+(`GET /api/boosts/status`, `POST /api/boosts/activate`) — and a **Priority Like**
+("Super Like" equivalent) — a `priority: true` boolean extension of the existing
+`POST /api/discovery/swipe` (new `Like.priority` field, default `false`, only
+valid alongside `action: 'like'`), rather than a new `action` enum value, since a
+priority like is still fundamentally a like (same match detection, same
+already-swiped exclusion, same daily-quota consumption). Both are backed by two
+new, simple fungible credit counters on `User`
+(`boostCreditsRemaining`/`priorityLikesRemaining`, schema default `1` each so
+every signup gets one free taster of each, `min: 0`), consumed via
+`backend/utils/entitlementUtils.js#tryActivateBoost()`/`tryConsumePriorityLike()`
+— same "always read the real DB state, never trust a client claim" discipline as
+the pre-existing `tryConsumeDailyLike()`, checked-before-decremented so a balance
+can never go negative and an already-active Boost can never be double-activated
+(consumes no credit on the resulting `409`). `Plan.boostCreditsGranted`/
+`priorityLikesGranted` (new fields, seeded escalating per tier — CG Plus +1
+Boost/+3 Priority Likes, CG Pro +3/+8, CG Elite +5/+15,
+`backend/constants/subscriptionOptions.js#DEFAULT_PLANS`) top up both balances
+additively, ONE TIME, on `POST /api/subscription/subscribe`
+(`backend/utils/entitlementUtils.js#grantPlanCredits()`) — **honestly scoped: not
+a recurring monthly re-grant**, since no job scheduler exists anywhere in this
+codebase to detect a renewal (see `MOCK_FEATURES.md`). **The ranking integration
+is the mechanically interesting part:** `backend/utils/discoveryRankingUtils.js`'s
+`computeRankScore()` (Task #19's four-signal weighted blend) now also adds two
+flat, deliberately NON-weighted, NON-clamped post-blend bonuses — `+30`
+(`BOOST_RANK_BONUS`) for any candidate with a currently-active Boost, `+25`
+(`PRIORITY_LIKE_RANK_BONUS`) for a candidate who has priority-liked THIS specific
+viewer and hasn't been swiped back yet, stackable to `+55` — resolved via one
+bulk query each (`getActiveBoostedUserIds()`, and a single indexed `Like.find()`
+for pending priority-likers) against the already-eligibility-filtered candidate
+pool, never against the full user base. **Verified this never bypasses Task #14's
+eligibility filtering:** both bonuses are computed strictly from
+`eligiblePool` — the MongoDB `filter`-driven output of Task #14's hard
+gender/age/distance/verified/incognito/block gate — and only ever affect
+`rankScore`, the sort key; a boosted or priority-liking candidate can rank
+higher within that pool, it can never appear outside it. See
+`docs/API_DOCUMENTATION.md`'s §15 and `docs/DATABASE_SCHEMA.md`'s `boosts`
+section for the full contract, and this file's "Last Successful Test" entry
+below for the verification detail.
+Before this, Task #19 — a weighted ranking/recommendation algorithm for the
+discovery feed, added 2026-08-18
 ("hamare dating app ke matching function aur profile suggestion ko algorithm
 samjha kar optimize karo, jaise other dating apps kaam karte hain"). Task #14
 (prior pass, see below) built the ELIGIBILITY layer — a hard MongoDB-query-level
@@ -308,11 +357,11 @@ Profile Coach and a real-AI version of AI Date Ideas (V2, would need a real Clau
 integration — see MOCK_FEATURES.md; Why-You-Match and Smart Icebreakers are already
 implemented as deterministic heuristics, and Date Planner is already implemented as a
 curated heuristic suggestion generator — not the same as a future real-AI "AI Date
-Ideas" — see "Current Task" above), Profile Boost, Priority Like, real Razorpay
-integration, voice/video calling, real Instagram OAuth (all V2 — Referral program,
-Safe Date mode/Date Planner, Location/age preferences + advanced filters + Private
-browsing, and now the weighted discovery-ranking algorithm are all implemented, see
-"Current Task" above); CG Connect/Events, advanced Trust Engine, a genuinely
+Ideas" — see "Current Task" above), real Razorpay integration, voice/video calling,
+real Instagram OAuth (all V2 — Referral program, Safe Date mode/Date Planner,
+Location/age preferences + advanced filters + Private browsing, the weighted
+discovery-ranking algorithm, and now Profile Boost + Priority Like are all
+implemented, see "Current Task" above); CG Connect/Events, advanced Trust Engine, a genuinely
 **learned/trained** ML recommendation model (Task #19's ranking is a documented
 heuristic weighted scorer, not this — see "Current Task" above and MOCK_FEATURES.md),
 advanced admin
@@ -348,7 +397,51 @@ Chat is text-only. Report evidence is plain strings, no file upload. No
 automated test suite exists in either backend/ or frontend/ (see
 docs/TESTING_STRATEGY.md). BUG-001 (rate limiting/security headers beyond auth) is
 tracked from a prior pass — see above.
-Last Successful Test (Task #19 — weighted discovery ranking algorithm, this pass):
+Last Successful Test (Task #16 — Profile Boost + Priority Like, this pass, recovered
+after a prior session's transient crash): Backend — `node -e "require('./server.js')"`
+boots cleanly, no import/syntax errors, listens on port 5000; live `curl` against
+`GET /api/boosts/status` and `POST /api/boosts/activate` with no `Authorization`
+header both returned 401. A standalone Node verification script
+(`backend/__verify_task16.js`, run from inside `backend/` so `node_modules`
+resolved, deleted before commit per this project's established convention —
+already present, complete, and correct in the crashed session's uncommitted
+working tree; this session ran it as-is and confirmed all 58 checks passed, no
+fix needed) covered six parts: (A) pure-function checks on
+`discoveryRankingUtils.js#computeRankScore()` — a boosted score is exactly
+baseline `+ BOOST_RANK_BONUS (30)`, a priority-liked score is exactly baseline
+`+ PRIORITY_LIKE_RANK_BONUS (25)`, both stack to exactly `+55`, and default
+`isBoosted`/`hasPendingPriorityLike` are `false` (no behavior change for
+pre-existing callers); (B) schema `validateSync()` checks — `User`'s two new
+credit fields default to `1` and reject a negative value, `Plan`'s two new grant
+fields default to `0`, `Like.priority` defaults to `false`, `Boost` accepts a
+valid `source` and rejects an unknown one, and `DEFAULT_PLANS`' grants escalate
+CG_PLUS < CG_PRO < CG_ELITE for both credit types; (C) HTTP-level, hijacking
+`require.cache` for `User`/`Boost` with fake in-memory stores (same
+fake-model-over-real-route-over-real-HTTP pattern this project has used since
+Task #6) and mounting the REAL `backend/routes/boosts.js` — confirmed
+`GET /api/boosts/status` and `POST /api/boosts/activate`'s full lifecycle: 30-
+minute duration, credit decremented from 1 to 0 and actually persisted, a
+double-activate returns `409` without a further decrement, a 0-credit user gets
+`402` with `upgradeRequired: true` and never goes negative, both routes 401
+with no auth; (D) HTTP-level over the REAL `backend/routes/discovery.js`'s
+`POST /swipe` with `priority: true` — credit decremented, `Like.priority`
+persisted `true`, a second priority like with 0 credits remaining returns `402`
+and never goes negative, `priority: true` on a `'pass'` and a non-boolean
+`priority` both return `400`, and an ordinary like (no `priority` field) is
+unaffected and reads `priority: false`; (E) HTTP-level over the REAL
+`GET /api/discovery/feed` — a boosted candidate ranks first, a candidate who
+priority-liked THIS viewer ranks above an otherwise-identical plain candidate,
+a DIFFERENT viewer who was never priority-liked sees no such reordering, and —
+the critical eligibility check — a candidate who is both boosted AND blocked by
+the viewer is excluded from the feed entirely, proving the ranking bonus never
+bypasses Task #14's hard eligibility filter; (F)
+`entitlementUtils.js#grantPlanCredits()` — additive `$inc` top-up (`2+3=5`,
+`1+8=9`, confirmed persisted), and a `0`/`0`-grant plan is a genuine no-op.
+Frontend — `npm run build` clean (no errors, `dist/` produced, 402.81 kB main
+bundle); `npm run lint` (oxlint) — 0 errors, the same 2 pre-existing
+`only-export-components` warnings carried forward (also present, unrelated to
+this task, in the untouched `NotificationContext.jsx`), no new warnings.
+Before this, Task #19 — weighted discovery ranking algorithm, prior pass:
 Backend — `node -e "require('./server.js')"` boots cleanly, no import/syntax errors,
 listens on port 5000; `GET /api/health` 200; `curl` against `GET /api/discovery/feed`
 with no `Authorization` header, and separately with a garbage bearer token, both
@@ -559,7 +652,34 @@ empty states confirmed present on Discovery, Matches, Chat, NotificationBell, an
 four Admin screens (all funnel through `frontend/src/api.js`'s single `request()`
 helper, which attaches `.status`/`.data` to thrown errors consistently) — no changes
 needed.
-Last Modified Files (Task #19 — weighted discovery ranking algorithm, this pass):
+Last Modified Files (Task #16 — Profile Boost + Priority Like, this pass, recovered
+after a prior session's transient crash): backend/models/Boost.js (new — one
+document per activation), backend/routes/boosts.js (new — GET /status,
+POST /activate), backend/constants/boostOptions.js (new — BOOST_DURATION_MINUTES=30,
+BOOST_SOURCES, FREE_BOOST_CREDITS/FREE_PRIORITY_LIKES=1 each),
+backend/models/Like.js (new `priority` boolean, default false),
+backend/models/Plan.js (new `boostCreditsGranted`/`priorityLikesGranted`, default 0),
+backend/models/User.js (new `boostCreditsRemaining`/`priorityLikesRemaining`,
+default 1, min 0), backend/constants/subscriptionOptions.js (DEFAULT_PLANS gained
+escalating credit grants per tier), backend/routes/auth.js (GET /me now exposes
+both credit balances), backend/routes/discovery.js (POST /swipe gained `priority`
+handling; GET /feed gained the boost/priority-like bulk lookups + ranking bonus
+wiring), backend/routes/subscription.js (POST /subscribe now calls
+grantPlanCredits(), response gained `creditsGranted`), backend/server.js (mounts
+boostsRouter at /api/boosts), backend/utils/discoveryRankingUtils.js
+(BOOST_RANK_BONUS=30/PRIORITY_LIKE_RANK_BONUS=25, added post-blend on top of the
+existing four-signal weighted score), backend/utils/entitlementUtils.js (new
+getActiveBoost()/getActiveBoostedUserIds()/tryActivateBoost()/
+tryConsumePriorityLike()/grantPlanCredits()), frontend/src/api.js,
+frontend/src/components/NotificationBell.jsx (distinguishing "Someone sent you a
+Priority Like!" copy), frontend/src/context/AuthContext.jsx (exposes
+refreshUser()), frontend/src/pages/Discovery.jsx (Boost activation UI, Priority
+Like swipe action, credit balance display), docs/API_DOCUMENTATION.md (new §15),
+docs/DATABASE_SCHEMA.md, docs/BUSINESS_PLAN.md, MOCK_FEATURES.md, this file,
+IMPLEMENTATION_PROGRESS.md. `backend/__verify_task16.js` (scratch verification
+script) was written and run during this task but deleted before commit per this
+project's established convention — never appears in the committed diff.
+Before this, Task #19 — weighted discovery ranking algorithm, prior pass:
 backend/utils/discoveryRankingUtils.js (new — the scoring function, weights config,
 signal normalizers), backend/routes/discovery.js (GET /feed rewritten to fetch a
 bounded eligible-candidate pool, score+sort it, then paginate over the sorted pool;
@@ -650,14 +770,22 @@ package-lock.json (bcrypt 5.1.1 → 6.0.0, express-rate-limit added), docs/
 SECURITY_AUDIT.md (new), BUGS.md (BUG-001 added), PROJECT_STATE.md (this file),
 IMPLEMENTATION_PROGRESS.md, TODO.md, MOCK_FEATURES.md, README.md, docs/ROADMAP.md (all
 updated to reflect final MVP-complete state — see git log for the exact diff).
-Database Status: **No schema/model changes this pass (Task #19)** — the discovery
-ranking algorithm reuses `users.lastLoginAt` (already existed, stamped on login since
-before this pass) as-is for its recent-activity signal, and computes `rankScore`
-live per request over a bounded pool, never persisting it (same "computed on read,
-never stored" pattern already established for Task #15's `compatibility`). The
-admin-configurable ranking weights are an in-process object, not a database
-document — see `docs/DATABASE_SCHEMA.md`'s `discovery_ranking_config` divergence
-note. Prior pass (Task #14): `Profile` gained a `preferences` sub-document
+Database Status: **This pass (Task #16) added one new collection and extended
+three existing ones.** New: `Boost` (`backend/models/Boost.js` — `user`,
+`startedAt`, `expiresAt`, `source`, one document per activation). Extended:
+`User` gained `boostCreditsRemaining`/`priorityLikesRemaining` (Number, default
+`1` each, `min: 0`); `Like` gained `priority` (Boolean, default `false`); `Plan`
+gained `boostCreditsGranted`/`priorityLikesGranted` (Number, default `0`,
+`min: 0`). `rankScore`'s two new bonuses (`BOOST_RANK_BONUS`/
+`PRIORITY_LIKE_RANK_BONUS`) are, like the rest of `rankScore`, computed live per
+request, never persisted. Prior pass (Task #19): no schema/model changes — the
+discovery ranking algorithm reuses `users.lastLoginAt` (already existed, stamped
+on login since before that pass) as-is for its recent-activity signal, and
+computes `rankScore` live per request over a bounded pool, never persisting it
+(same "computed on read, never stored" pattern already established for Task
+#15's `compatibility`). The admin-configurable ranking weights are an in-process
+object, not a database document — see `docs/DATABASE_SCHEMA.md`'s
+`discovery_ranking_config` divergence note. Before that (Task #14): `Profile` gained a `preferences` sub-document
 (`maxDistanceKm`/`minAge`/`maxAge`/`datingIntentions`/`verifiedOnly`), a `location`
 GeoJSON Point (2dsphere-indexed, reusing the index that already existed but was never
 populated) + `locationSource` enum, and `privacySettings.incognito`. `SafeDate`
@@ -676,23 +804,29 @@ session across this entire project — this remains the top technical-debt item 
 "Known Technical Debt" and TODO.md's "Before real production launch" section).
 Backend Status: Express + Socket.IO server (same HTTP server) running with auth +
 profile + discovery + matches + notifications + verification + reports + blocks +
-subscription + referrals + safe-dates + date-ideas + admin routes. This pass
-(Task #19) rewrote `GET /api/discovery/feed`'s post-filter fetch/pagination logic
-in place (bounded eligible-candidate pool -> score+sort -> paginate over the sorted
-pool; `compatibility` field added to each response card) and added two new admin
-routes (`GET`/`PATCH /api/admin/discovery/ranking-weights`, `ADMIN`+) — no route was
-removed, and Task #14's eligibility-filter query itself was left completely
-untouched. Prior pass (Task #14) rewrote `GET /api/discovery/feed`'s filtering logic
-in place (bidirectional gender + age matching, distance/verified-only/incognito
-filtering, query-param overrides) and extended `PUT /api/profile/me` for the
-preference/location/privacy fields. Boots cleanly; `GET /api/health` confirmed live.
-Frontend Status: This pass (Task #19) added a `CompatibilityBadge` + top-reason line
-to each Discovery card (`Discovery.jsx`, reusing Task #15's existing component,
-driven by the feed response's new `compatibility` field) — no new screen/route.
-Prior pass (Task #14) added one new screen (`DiscoveryPreferences.jsx`) plus a "Use
-my current location" control in `ProfileBuilder.jsx` and a "Search wider" control +
-distance display in `Discovery.jsx`. `npm run build`/`npm run lint` both clean (0
-errors, same 2 pre-existing warnings carried forward).
+subscription + referrals + safe-dates + date-ideas + admin + **boosts (new,
+Task #16)** routes. This pass (Task #16) added `backend/routes/boosts.js`
+(`GET /status`, `POST /activate`), extended `POST /api/discovery/swipe` with a
+`priority: true` path and `GET /api/discovery/feed` with two bulk boost/
+priority-like lookups feeding into `computeRankScore()`'s two new bonuses, and
+extended `POST /api/subscription/subscribe` to grant plan credits on checkout —
+no existing route was removed, and Task #14's eligibility-filter query itself
+was again left completely untouched (see "Current Task" above for the explicit
+verification that the new ranking bonuses never bypass it). Prior pass (Task
+#19) rewrote `GET /api/discovery/feed`'s post-filter fetch/pagination logic in
+place (bounded eligible-candidate pool -> score+sort -> paginate over the
+sorted pool; `compatibility` field added to each response card) and added two
+new admin routes (`GET`/`PATCH /api/admin/discovery/ranking-weights`,
+`ADMIN`+). Boots cleanly; `GET /api/health` confirmed live.
+Frontend Status: This pass (Task #16) added Boost activation UI + a Priority
+Like swipe action + credit-balance display to `Discovery.jsx`, a distinguishing
+notification copy to `NotificationBell.jsx`, and `refreshUser()` to
+`AuthContext.jsx` — no new screen/route (Boost/Priority Like live inline on the
+existing Discovery screen, not a separate page). Prior pass (Task #19) added a
+`CompatibilityBadge` + top-reason line to each Discovery card (reusing Task
+#15's existing component, driven by the feed response's `compatibility`
+field). `npm run build`/`npm run lint` both clean (0 errors, same 2
+pre-existing warnings carried forward).
 Authentication Status: Implemented (signup/login/JWT/me endpoint), now with rate
 limiting on both signup and login and the password hash never selected by default —
 unchanged otherwise.
@@ -711,44 +845,47 @@ V3 direction. AI Profile Coach and a real-AI version of "AI Date Ideas" remain n
 started (see docs/ROADMAP.md Phase 11); see MOCK_FEATURES.md for the full explanation
 and what a real upgrade would need.
 Payment Status: Subscription scaffolding implemented — MOCK checkout, not real
-Razorpay yet (unchanged this pass; still explicitly not production-ready as-is, see
-MOCK_FEATURES.md). The Task #17 referral reward (`paymentProvider:
-'referral_reward'`, 7 days of `CG_PLUS`, granted for free on a successful referred
-signup) remains the one non-payment way a `Subscription` row can be created —
-unchanged this pass.
+Razorpay yet (still explicitly not production-ready as-is, see MOCK_FEATURES.md).
+This pass (Task #16), `POST /api/subscription/subscribe` gained a side effect:
+a successful (mock) checkout now also grants the plan's `boostCreditsGranted`/
+`priorityLikesGranted` credits, one time, additively — see "Current Task" above
+and MOCK_FEATURES.md's Task #16 entry for the "one-time, not recurring" caveat
+this inherits from having no job scheduler. The Task #17 referral reward
+(`paymentProvider: 'referral_reward'`, 7 days of `CG_PLUS`, granted for free on
+a successful referred signup) remains the one non-payment way a `Subscription`
+row can be created — unchanged this pass.
 Admin Status: Implemented — role/accountStatus on User, role-gated /api/admin/* routes
 (dashboard, reports queue, photo-verification queue, suspend/reinstate, SUPER_ADMIN-only
-role change, and now — Task #19, this pass — `GET`/`PATCH .../discovery/ranking-weights`,
+role change, and — Task #19, prior pass — `GET`/`PATCH .../discovery/ranking-weights`,
 `ADMIN`+, in-process only/not yet persisted, see "Database Status" above), AuditLog on
-every mutation, role-gated /admin frontend section (frontend unchanged this pass — no
-admin UI was built for the ranking-weights routes, only the API; an admin can call them
-directly, e.g. via curl/Postman, until a UI is worth adding).
+every mutation, role-gated /admin frontend section. Unchanged this pass (Task #16) — no
+new admin route or UI was needed for Boost/Priority Like, since both are entirely
+self-serve, user-facing mechanics with no moderation surface.
 Deployment Status: Not started (planned: Render/Railway + MongoDB Atlas +
 Vercel/Netlify + Cloudinary — Phase 15, cross-cutting, not yet started).
-Next Exact Task: **Likely Task #16 — Profile Boost + Priority Like** (V2), the next
-item this project's own tracking docs have flagged as "not started" across every
-prior pass (see "Remaining Features" above and docs/ROADMAP.md's V2 section) — but
-this session had no access to the orchestrating session's TaskList tool to confirm
-the exact number, so treat "#16" as an honest best guess from `git log` + this
-file's own history, not a confirmed fact; **check the TaskList tool directly if the
-next session has access to it** before trusting this number. What IS confirmed: as
-of this pass's commit, Task #19 (weighted discovery ranking, this pass) and every
-task listed in "Completed Features"/"Current Task" above are done; Boost/Priority
-Like have no commits anywhere in `git log` and no code anywhere in this repo (grepped
-at the time of writing this pass's notes). Also still not done, V2 scope: AI Profile
-Coach, a real-AI version of AI Date Ideas (both would need a real Claude API
-integration — see MOCK_FEATURES.md), real Razorpay integration, voice/video calling,
-real Instagram OAuth — see docs/ROADMAP.md's V2 section. This project remains
-explicitly **not production-ready** as-is regardless of V2 progress — see TODO.md's
-"Before real production launch" section for the concrete MVP-hardening list (live
-MongoDB Atlas connection + testing, real Cloudinary/Firebase/Razorpay/SMS provider
-credentials, real `.env` production secrets, a seeded real `SUPER_ADMIN` account, an
-automated test suite per docs/TESTING_STRATEGY.md, a unique index on `User.phone`,
-HTTPS/hosting setup per docs/ARCHITECTURE.md's Phase 15, and closing BUG-001) — that
-work remains the recommended default focus whenever V2 feature requests aren't
-actively driving the branch, per this project's own MVP-first sequencing principle
-(docs/ROADMAP.md's "Notes on sequencing"), but absent a further specific user
-request, Boost/Priority Like is the best-guess concrete next V2 item.
+Next Exact Task: **No further V2 items are currently queued by the user.** Task #16
+(Profile Boost + Priority Like, this pass) was the last item in this user's
+post-MVP V2 feature-request batch — per the task instructions this pass was run
+under (this session, like every prior one, had no direct access to the
+orchestrating session's TaskList tool to independently re-verify the task graph
+itself, so this is stated on the strength of that instruction plus the corroborating
+fact that `git log`/this file's own history show every other named V2 item —
+Instagram linking, Why-You-Match/Icebreakers (#15), Referral program (#17), Safe
+Date/Date Planner (#18), match preferences/advanced filters/private browsing (#14),
+weighted ranking (#19), and now Boost/Priority Like (#16) — already shipped, with
+nothing else named anywhere in this project's docs as "in progress" or "queued").
+**Recommended next focus:** either (a) the "Before real production launch"
+hardening list in TODO.md — live MongoDB Atlas connection + testing, real
+Cloudinary/Firebase/Razorpay/SMS provider credentials, real `.env` production
+secrets, a seeded real `SUPER_ADMIN` account, an automated test suite per
+docs/TESTING_STRATEGY.md, a unique index on `User.phone`, HTTPS/hosting setup per
+docs/ARCHITECTURE.md's Phase 15, and closing BUG-001 — this project remains
+explicitly **not production-ready** as-is regardless of V2 feature completeness; or
+(b) whatever the user requests next — ask them. Still not done if the user does
+open a new V2 request: AI Profile Coach, a real-AI version of AI Date Ideas (both
+would need a real Claude API integration — see MOCK_FEATURES.md), real Razorpay
+integration, voice/video calling, real Instagram OAuth — see docs/ROADMAP.md's V2
+section.
 Next Recommended Action: Get a real MongoDB connection (Atlas free tier is enough)
 verified in whatever environment picks this project up next — every DB-dependent
 behavior in this entire codebase (10 feature tasks' worth of indexes, `select: false`

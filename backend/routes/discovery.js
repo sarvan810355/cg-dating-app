@@ -10,7 +10,11 @@ const { toPublicProfileJSON } = require('../utils/profileSerializers');
 const { canonicalPair, isMutualLike } = require('../utils/matchUtils');
 const { createNotification } = require('../utils/notificationUtils');
 const { getBlockedUserIds } = require('../utils/blockUtils');
-const { tryConsumeDailyLike } = require('../utils/entitlementUtils');
+const {
+  tryConsumeDailyLike,
+  tryConsumePriorityLike,
+  getActiveBoostedUserIds,
+} = require('../utils/entitlementUtils');
 const { DATING_INTENTIONS, MIN_AGE } = require('../constants/profileOptions');
 const {
   SWIPE_ACTIONS,
@@ -38,6 +42,9 @@ function toLikeJSON(like) {
     fromUserId: like.fromUser,
     toUserId: like.toUser,
     action: like.action,
+    // Task #16 — Priority Like (V2 scope). Always `false` for a 'pass' or an
+    // ordinary like — see backend/models/Like.js's field comment.
+    priority: !!like.priority,
     createdAt: like.createdAt,
   };
 }
@@ -91,7 +98,14 @@ async function createMatchIfMutual(fromUserId, toUserId) {
 // purely to decide ORDER (compatibility/distance-closeness/profile-trust/
 // recent-activity, weighted). Ranking can never surface an ineligible
 // candidate and can never drop an eligible one — see the pool-fetch comment
-// further down for exactly where each layer runs.
+// further down for exactly where each layer runs. Task #16 (Profile Boost +
+// Priority Like, V2) adds two more RANKING-layer (not eligibility-layer)
+// bonuses on top of that same weighted score — see
+// discoveryRankingUtils.js's BOOST_RANK_BONUS/PRIORITY_LIKE_RANK_BONUS and
+// the bulk boosted/priority-liker queries further down — a boosted or
+// priority-liking candidate can rank higher, but a Boost/Priority Like can
+// never make an ineligible candidate appear either; it only nudges the
+// ORDER within the same eligibility-filtered pool.
 //
 // CRITICAL correctness rule (Task #14 audit finding — see PROJECT_STATE.md):
 // gender and age matching are both BIDIRECTIONAL. Previously this feed had
@@ -321,19 +335,53 @@ router.get('/feed', requireAuth, async (req, res) => {
     }).select('mobileVerification.status photoVerification.status lastLoginAt');
     const userById = new Map(candidateUsers.map((u) => [String(u._id), u]));
 
+    // --- Task #16: Profile Boost + Priority Like ranking bonuses. Both are
+    // ONE bulk query each against the already-bounded pool's user ids (never
+    // N+1) — see backend/utils/discoveryRankingUtils.js's top comment above
+    // BOOST_RANK_BONUS/PRIORITY_LIKE_RANK_BONUS for the full mechanism/
+    // magnitude writeup. ---
+    const poolUserIds = eligiblePool.map((p) => p.user);
+    // Shared "now" for both the boost/priority-like lookups below and
+    // Task #19's activity-signal scoring further down — one timestamp for
+    // the whole request, not re-read per candidate.
+    const now = new Date();
+    // (a) Profile Boost — a candidate with any currently-active (non-expired)
+    // Boost document ranks higher for EVERY viewer, not just this one.
+    const boostedUserIdsPromise = getActiveBoostedUserIds(poolUserIds, now);
+    // (b) Priority Like — "has this candidate sent ME (the viewer) a
+    // priority like I haven't yet swiped on" — TARGETED to this one viewer,
+    // not a global boost. Every candidate still in `eligiblePool` has, by
+    // construction, never been swiped on by the viewer yet (already-swiped
+    // users are excluded from `filter.user` above), so this query only needs
+    // `fromUser` (in the pool) + `toUser` (me) + `action: 'like'` +
+    // `priority: true` — a single indexed lookup, not a second pass over
+    // "everyone who ever priority-liked me".
+    const pendingPriorityLikerIdsPromise = Like.find({
+      fromUser: { $in: poolUserIds },
+      toUser: req.user.id,
+      action: 'like',
+      priority: true,
+    }).distinct('fromUser');
+    const [boostedUserIds, pendingPriorityLikerIdsRaw] = await Promise.all([
+      boostedUserIdsPromise,
+      pendingPriorityLikerIdsPromise,
+    ]);
+    const pendingPriorityLikerIds = new Set(pendingPriorityLikerIdsRaw.map(String));
+
     // --- Task #19: score + sort the pool. ---
     // `computeCompatibility()` is Task #15's existing Why-You-Match scorer,
     // reused directly (not re-derived) both as the ranking's heaviest signal
     // AND as the response's own `compatibility` field below — computed
     // exactly once per candidate either way. See
     // backend/utils/discoveryRankingUtils.js for the full weighting/
-    // normalization writeup.
-    const now = new Date();
+    // normalization writeup. `now` is the shared timestamp declared above,
+    // ahead of the boost/priority-like queries.
     const rankingWeights = getRankingWeights();
     const scoredPool = eligiblePool.map((p) => {
       const candidateUser = userById.get(String(p.user));
       const compatibility = computeCompatibility(myProfile, p);
       const distanceKm = distanceById.has(String(p.user)) ? distanceById.get(String(p.user)) : null;
+      const candidateIdStr = String(p.user);
       const { rankScore } = computeRankScore(
         {
           compatibilityScore: compatibility.score,
@@ -344,6 +392,10 @@ router.get('/feed', requireAuth, async (req, res) => {
           photoVerified: candidateUser?.photoVerification?.status === 'VERIFIED',
           lastLoginAt: candidateUser?.lastLoginAt || null,
           now,
+          // Task #16 — see the bulk queries above; both are plain O(1) Set
+          // lookups here, no further DB access per candidate.
+          isBoosted: boostedUserIds.has(candidateIdStr),
+          hasPendingPriorityLike: pendingPriorityLikerIds.has(candidateIdStr),
         },
         rankingWeights
       );
@@ -390,7 +442,7 @@ router.get('/feed', requireAuth, async (req, res) => {
 // Records a like/pass, and if it completes a mutual like, creates a Match.
 router.post('/swipe', requireAuth, async (req, res) => {
   try {
-    const { toUserId, action } = req.body || {};
+    const { toUserId, action, priority } = req.body || {};
 
     if (!toUserId || !mongoose.Types.ObjectId.isValid(toUserId)) {
       return res.status(400).json({ message: 'toUserId must be a valid user id' });
@@ -400,6 +452,19 @@ router.post('/swipe', requireAuth, async (req, res) => {
     }
     if (String(toUserId) === String(req.user.id)) {
       return res.status(400).json({ message: 'You cannot swipe on yourself' });
+    }
+    // Task #16 — Priority Like (V2 scope, "Super Like" equivalent): optional
+    // `priority: true` in the body, only meaningful alongside `action:
+    // 'like'` — a 'pass' can never be priority (there's nothing to
+    // prioritize). Reject a malformed/misapplied combination outright
+    // (400) rather than silently downgrading it to a normal swipe, per the
+    // task's own "never silently downgrade" instruction.
+    if (priority !== undefined && typeof priority !== 'boolean') {
+      return res.status(400).json({ message: 'priority must be a boolean' });
+    }
+    const wantsPriority = priority === true;
+    if (wantsPriority && action !== 'like') {
+      return res.status(400).json({ message: 'priority can only be set on a "like" swipe' });
     }
 
     // Profile-must-exist checks (same pattern as backend/routes/profile.js):
@@ -458,9 +523,40 @@ router.post('/swipe', requireAuth, async (req, res) => {
       }
     }
 
+    // Task #16 — Priority Like entitlement: a SEPARATE, non-resetting credit
+    // from the daily like quota just consumed above — a priority like is an
+    // upgrade layered ON TOP of an ordinary like (it still counts against
+    // the daily free-like quota, same as any other like; unlimited-likes
+    // plan holders bypass that quota exactly as before), not a replacement
+    // for it. Checked/consumed AFTER the daily-quota check (so a caller who
+    // was going to hit the daily limit anyway gets that more fundamental
+    // 429 first) but still BEFORE Like.create() — a rejected priority
+    // request must never partially record anything. Deliberately a distinct
+    // status code (402, not 429) from the daily-quota limit above: running
+    // out of a spent, non-resetting credit is a genuinely different
+    // situation from hitting a quota that resets tomorrow — "come back
+    // tomorrow" is real advice for the 429 case and false advice for this
+    // one, so collapsing them into the same status/copy would mislead the
+    // caller about when the block lifts.
+    if (wantsPriority) {
+      const priorityCheck = await tryConsumePriorityLike(req.user.id);
+      if (!priorityCheck.allowed) {
+        return res.status(402).json({
+          message: "You're out of Priority Likes. Upgrade your plan for more.",
+          upgradeRequired: true,
+          priorityLikesRemaining: priorityCheck.remaining,
+        });
+      }
+    }
+
     let like;
     try {
-      like = await Like.create({ fromUser: req.user.id, toUser: toUserId, action });
+      like = await Like.create({
+        fromUser: req.user.id,
+        toUser: toUserId,
+        action,
+        priority: wantsPriority,
+      });
     } catch (err) {
       if (err.code === 11000) {
         // Race: a concurrent request recorded this swipe first.
@@ -517,10 +613,28 @@ router.post('/swipe', requireAuth, async (req, res) => {
         // premium-tier reveal in docs/BUSINESS_PLAN.md, so this payload
         // deliberately carries no identifying fields. The frontend renders
         // a generic "Someone liked your profile" message from `type` alone.
+        // Task #16 — Priority Like (V2 scope): a `priority: true` payload
+        // flag is the ONE exception to "no identifying fields" — it's not
+        // identifying (it never says WHO), only distinguishing (it says
+        // "this like was a Priority Like"), which is exactly the DISTINCT
+        // notification copy the task asked for ("Someone sent you a
+        // Priority Like!" vs. the generic "Someone liked your profile") —
+        // same `type: 'like'` (reusing the existing type/preference-gate
+        // rather than inventing a new notification type + a new
+        // `likeNotifications`-adjacent preference toggle for what is still
+        // fundamentally a like event), distinguished by payload alone, the
+        // same way `type: 'message'`'s payload already varies per message
+        // without needing its own type per message kind. A priority like
+        // that ALSO completes a mutual match takes the `match` branch above
+        // instead — a match notification already reveals full identity, so
+        // there's nothing left for a separate "it was a priority like" flag
+        // to add in that case (same reasoning an ordinary like's
+        // notification is already superseded by the match notification
+        // today).
         await createNotification({
           recipientId: toUserId,
           type: 'like',
-          payload: {},
+          payload: wantsPriority ? { priority: true } : {},
           io,
         });
       }

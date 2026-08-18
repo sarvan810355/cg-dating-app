@@ -87,6 +87,55 @@ const DEFAULT_RANKING_WEIGHTS = Object.freeze({
   activity: 0.15,
 });
 
+// --- Task #16 — Profile Boost + Priority Like (V2 scope). Two additional,
+// deliberately NOT-weighted-sum ranking effects, layered on TOP of the
+// four-signal weighted score above rather than folded into it as a fifth
+// weighted signal. Reasoning: the four signals above answer "how good a
+// match is this candidate, generically" (compatibility/distance/trust/
+// activity) — a smooth, continuously-varying 0-100 blend where no one signal
+// should be able to single-handedly override the others. A Boost/Priority
+// Like is categorically different: it's a candidate (or their plan) having
+// PAID/SPENT a real, finite, consumable credit specifically to be seen —
+// the entire product point is that it reliably and visibly outranks an
+// otherwise-identical non-boosted/non-priority-liking candidate, not that it
+// nudges their score by a fraction of a weighted point. A flat post-blend
+// additive bonus (not itself weighted, not itself normalized against the
+// other four) is the simplest mechanism that guarantees that outcome
+// regardless of how the four weights are admin-tuned — even at
+// `compatibility: 1.0`/others: `0`, a boosted candidate with a decent
+// compatibility score still clears a non-boosted one with the same score.
+// **Not clamped to the historical 0-100 rankScore range** — `rankScore` is a
+// pure internal sort key (see backend/routes/discovery.js — it is NEVER
+// returned to the client, only `compatibility` is), so letting it exceed 100
+// when boosted/priority-liked is harmless and avoids ever having to shrink
+// the four-signal blend to make room for the bonus.
+//
+// Magnitudes: BOOST_RANK_BONUS (30) is deliberately larger than
+// PRIORITY_LIKE_RANK_BONUS (25) — a Boost lifts a candidate's visibility to
+// EVERY viewer at once (the more expensive, broader-reach mechanic — see
+// docs/BUSINESS_PLAN.md), while a Priority Like only needs to lift the
+// candidate's ranking for the ONE specific viewer they priority-liked (a
+// narrower, cheaper, already-somewhat-targeted mechanic — the recipient
+// already knows someone liked them via the notification, this only ensures
+// that person's card also surfaces near the top of the recipient's own
+// feed). Both bonuses can stack (a boosted candidate who ALSO
+// priority-liked this specific viewer gets both, +55 total) — this is
+// intentional, not a bug: two independent, genuinely-earned reasons to rank
+// higher should compound, not cap each other out. Neither bonus is currently
+// wired into the admin-configurable `DEFAULT_RANKING_WEIGHTS`/
+// `setRankingWeights()` system above (that system governs the four
+// *relative-importance* signal weights, which must sum to ~1.0 — a
+// boost/priority bonus is an additive override, not a share of a 100%
+// budget, so it doesn't fit that same "weights sum to 1.0" contract) — a
+// future pass could expose these two numbers as their own separate
+// admin-configurable constants if real-world tuning data ever calls for it;
+// not done here since nothing in this task's spec asked for it and keeping
+// the weighted-sum contract's invariant (sums to ~1.0) simple was judged
+// more valuable than pre-emptively over-generalizing two numbers nothing
+// has asked to tune yet.
+const BOOST_RANK_BONUS = 30;
+const PRIORITY_LIKE_RANK_BONUS = 25;
+
 let currentRankingWeights = { ...DEFAULT_RANKING_WEIGHTS };
 
 function getRankingWeights() {
@@ -204,6 +253,14 @@ function computeActivityScore(lastLoginAt, now = new Date()) {
 // score purely so a verification script (or a future debug/admin view) can
 // see exactly which signal drove a given ranking, without recomputing
 // anything.
+// `isBoosted`/`hasPendingPriorityLike` (Task #16, both default `false` so
+// every pre-existing call site — before this task — keeps behaving
+// identically with no bonus applied) are plain booleans the caller
+// (backend/routes/discovery.js) resolves ONCE per candidate from the pool's
+// two bulk-fetched Sets (active-boosted user ids, pending-priority-liker
+// user ids) — see backend/utils/entitlementUtils.js#getActiveBoostedUserIds()
+// and backend/routes/discovery.js's own priority-like pool query. This
+// function itself stays DB-independent either way.
 function computeRankScore(
   {
     compatibilityScore,
@@ -214,6 +271,8 @@ function computeRankScore(
     photoVerified,
     lastLoginAt,
     now = new Date(),
+    isBoosted = false,
+    hasPendingPriorityLike = false,
   },
   weights = getRankingWeights()
 ) {
@@ -224,19 +283,34 @@ function computeRankScore(
     activity: computeActivityScore(lastLoginAt, now),
   };
 
-  const rankScore =
+  const weightedScore =
     signals.compatibility * weights.compatibility +
     signals.distance * weights.distance +
     signals.trust * weights.trust +
     signals.activity * weights.activity;
 
-  return { rankScore, signals };
+  // Task #16 — flat, post-blend, non-normalized bonuses — see the top
+  // comment above BOOST_RANK_BONUS/PRIORITY_LIKE_RANK_BONUS for the full
+  // "why additive, why not clamped, why the two magnitudes differ, why they
+  // stack" reasoning.
+  const boostBonus = isBoosted ? BOOST_RANK_BONUS : 0;
+  const priorityLikeBonus = hasPendingPriorityLike ? PRIORITY_LIKE_RANK_BONUS : 0;
+  const rankScore = weightedScore + boostBonus + priorityLikeBonus;
+
+  return {
+    rankScore,
+    signals,
+    isBoosted,
+    hasPendingPriorityLike,
+  };
 }
 
 module.exports = {
   DEFAULT_RANKING_WEIGHTS,
   NEUTRAL_SIGNAL_SCORE,
   ACTIVITY_DECAY_WINDOW_DAYS,
+  BOOST_RANK_BONUS,
+  PRIORITY_LIKE_RANK_BONUS,
   getRankingWeights,
   setRankingWeights,
   resetRankingWeights,

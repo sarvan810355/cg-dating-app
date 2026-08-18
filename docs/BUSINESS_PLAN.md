@@ -69,6 +69,33 @@ weighted scorer, same honest pattern as Why-You-Match/Smart Icebreakers/Date Pla
   already fully server-side and DB-backed (`hasFeature()`, never a client claim), but
   the *checkout* itself is not yet real Razorpay. See `MOCK_FEATURES.md`'s Razorpay
   entry before this ships to real users.
+- **Profile Boost + Priority Like — `[IMPLEMENTED, Task #16, V2, user-requested,
+  added 2026-08-18 — the last currently-queued V2 item]`.** Two consumable-credit
+  premium mechanics beyond the five plan feature flags above: a **Profile
+  Boost** (a 30-minute visibility spike, seen by every other user in the
+  discovery feed) and a **Priority Like** ("Super Like" equivalent — the
+  liked person sees this candidate ranked near the top of *their own* feed
+  specifically). This is the first place in the codebase to actually
+  introduce a standalone credit currency (`users.boostCreditsRemaining`/
+  `priorityLikesRemaining`) — the referral program above deliberately reused
+  the existing Subscription/Plan entitlement system instead of inventing
+  one; Boost/Priority Like needed a real per-activation, time-limited,
+  consumable unit that a subscription-status check can't express, so a
+  fungible credit counter was the right tool this time. Every signup gets 1
+  free credit of each as a taster; paid plans grant more, additively, one
+  time on subscribe — CG Plus +1 Boost/+3 Priority Likes, CG Pro +3/+8, CG
+  Elite +5/+15 (see `docs/DATABASE_SCHEMA.md`'s `plans` section for the exact
+  seed numbers, admin-editable like all other plan fields). Mechanically,
+  both work as a flat, deliberately non-clamped bonus layered on top of the
+  Matching & Discovery Ranking score above (`+30` for an active Boost, `+25`
+  for a pending Priority Like, stackable to `+55`) — reliably outranking an
+  otherwise-identical non-boosted candidate regardless of how the four
+  weighted signals are admin-tuned, while never letting a Boost/Priority
+  Like bypass the underlying hard eligibility filter (a blocked/wrong-gender/
+  out-of-range candidate stays invisible no matter how many credits they
+  spend). See `docs/API_DOCUMENTATION.md`'s §15 for the full route contract
+  and `MOCK_FEATURES.md` for the "one-time grant, not recurring" scope
+  caveat (no job scheduler exists yet to re-grant credits on renewal).
 
 ## Growth Strategy
 

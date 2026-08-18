@@ -344,6 +344,33 @@ resolved by this pass (this pass was audit/polish/docs, not new feature work —
       (café, restaurant, park, multiplex, public lake/garden, etc.) per the
       product spec's explicit safety rule against suggesting isolated/private
       meeting spots — enforced by hand-curating the list, not a runtime filter.
+- [ ] **Profile Boost + Priority Like credit grants are ONE-TIME on subscribe,
+      not a recurring monthly top-up.** `[NEW, Task #16, V2, user-requested,
+      added 2026-08-18 — the last currently-queued V2 item]`. `Plan.boostCreditsGranted`/
+      `priorityLikesGranted` (see `docs/DATABASE_SCHEMA.md`'s `plans` section)
+      are added to `users.boostCreditsRemaining`/`priorityLikesRemaining`
+      exactly once, the moment `POST /api/subscription/subscribe` succeeds
+      (`backend/utils/entitlementUtils.js#grantPlanCredits()`) — a subscriber
+      does NOT receive a fresh batch of credits on each monthly/yearly
+      renewal, because there is no background job scheduler anywhere in this
+      codebase (no `node-cron`, no task queue — same standing gap already
+      documented above for Safe Date's reminder computation and mobile-OTP
+      delivery) to detect a renewal and re-grant. A real implementation would
+      need either a scheduled job that re-grants on each `Subscription`
+      renewal, or a "credits refresh with your billing cycle" read-time
+      computation similar to the daily-like-quota's UTC-day reset. **What IS
+      real and non-mocked:** the credit balances themselves
+      (`users.boostCreditsRemaining`/`priorityLikesRemaining`, schema-backed,
+      `min: 0`), the "can't go negative, can't double-activate an active
+      boost" consumption logic (`backend/utils/entitlementUtils.js#tryActivateBoost()`/
+      `tryConsumePriorityLike()`), the 30-minute Boost expiry, and the
+      discovery-ranking bonus both mechanics apply — none of that is faked,
+      only the "recurring" half of the grant is out of scope for this pass.
+      Also inherits the existing MOCK-checkout caveat above: since
+      `POST /api/subscription/subscribe` itself doesn't collect a real
+      payment, a plan's one-time credit grant is likewise handed out for free
+      today, same as the subscription it rides on. See
+      `docs/API_DOCUMENTATION.md`'s §15 for the full route contract.
 
 ## Resolved (mocks replaced with real implementations)
 

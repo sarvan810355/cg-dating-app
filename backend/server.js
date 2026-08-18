@@ -19,6 +19,7 @@ const referralsRouter = require('./routes/referrals');
 const adminRouter = require('./routes/admin');
 const safeDatesRouter = require('./routes/safeDates');
 const dateIdeasRouter = require('./routes/dateIdeas');
+const boostsRouter = require('./routes/boosts');
 const { initSocket } = require('./socket');
 const { seedDefaultPlans } = require('./utils/entitlementUtils');
 
@@ -66,6 +67,12 @@ app.use('/api/admin', adminRouter);
 // generator) — see docs/API_DOCUMENTATION.md for the full route list.
 app.use('/api/safe-dates', safeDatesRouter);
 app.use('/api/date-ideas', dateIdeasRouter);
+// Task #16 — Profile Boost + Priority Like (V2 scope, the last currently-
+// queued item from the user's post-MVP feature batch — see PROJECT_STATE.md).
+// Priority Like itself has no dedicated router — it's an extension of the
+// existing POST /api/discovery/swipe (backend/routes/discovery.js), not a
+// new base path.
+app.use('/api/boosts', boostsRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'CG Dating API' });

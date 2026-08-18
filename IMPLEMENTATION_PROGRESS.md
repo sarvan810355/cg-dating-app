@@ -10,6 +10,155 @@ next task that follows from it.
 
 ---
 
+## 2026-08-18 — Profile Boost + Priority Like (Task #16, V2, user-requested) — recovered after a transient crash
+
+- **Recovery note:** an earlier agent session on this branch implemented this
+  task in full, then crashed mid-task from a transient connection error
+  unrelated to the code — its last message before crashing correctly
+  diagnosed a mock-fidelity gap in its own scratch verification script (fake
+  profile fixtures missing `.toObject()`, which the real
+  `profileSerializers.js` calls on a genuine Mongoose document) rather than a
+  real bug. This session picked up the already-substantially-complete,
+  uncommitted working tree, verified the diff against the task spec end to
+  end, ran the existing (already-correct — the `.toObject()` fix had already
+  landed before the crash) verification script, ran the full backend-boot +
+  curl + frontend-build + lint checks, confirmed the ranking-bonus mechanism
+  never bypasses Task #14's eligibility filtering, updated docs, and
+  committed. No implementation logic was rewritten in this pass — this was a
+  finishing/verification pass, not a re-implementation.
+- **Phase:** Phase 12-adjacent V2 feature — the last currently-queued item in
+  this user's post-MVP feature-request batch (see `PROJECT_STATE.md`'s "Next
+  Exact Task" for the full reasoning). Two consumable-credit premium
+  mechanics: a **Profile Boost** (a 30-minute visibility spike, seen by every
+  other user in the discovery feed) and a **Priority Like** ("Super Like"
+  equivalent — guarantees the liked person sees this candidate ranked near
+  the top of *their own* feed specifically).
+- **New `backend/models/Boost.js` + `backend/routes/boosts.js`:** one `Boost`
+  document per activation (`user`, `startedAt`, `expiresAt`, `source` —
+  `subscription_perk`/`purchased`/`referral_reward`), never a mutable
+  "current boost" field on `User`, so past boosts stay queryable after they
+  expire. `GET /api/boosts/status` (active/inactive + remaining seconds +
+  credit balance, always a fresh DB read) and `POST /api/boosts/activate`
+  (consumes one `boostCreditsRemaining` credit, `409` if already active with
+  no credit consumed, `402 upgradeRequired: true` if out of credits).
+  `expiresAt` is always `startedAt + 30 minutes` (`BOOST_DURATION_MINUTES`,
+  `backend/constants/boostOptions.js`), computed once and never
+  extended/renewed by a later call.
+- **Priority Like as an extension of `POST /api/discovery/swipe`, not a new
+  route:** new `Like.priority` boolean (default `false`), only valid
+  alongside `action: 'like'` (`priority: true` on a `'pass'` → `400`, never
+  silently downgraded) — modeled as a flag on the existing `Like` document
+  rather than a third `action` enum value, since a priority like is still
+  fundamentally a like (same mutual-match detection, same "don't re-show
+  this candidate" exclusion, same daily-like-quota consumption), just one
+  that additionally consumes a SEPARATE, non-resetting
+  `users.priorityLikesRemaining` credit (`402 upgradeRequired: true` when
+  exhausted — deliberately a different status than the daily-quota's `429`,
+  since a spent priority-like credit doesn't reset tomorrow the way the
+  daily quota does) and carries a distinguishing (not identity-revealing)
+  `"Someone sent you a Priority Like!"` notification instead of the generic
+  like notification.
+- **Two new credit counters on `User`**
+  (`boostCreditsRemaining`/`priorityLikesRemaining`, schema default `1` each,
+  `min: 0`) — every signup gets one free credit of each as a taster of both
+  mechanics. Consumed via `backend/utils/entitlementUtils.js#tryActivateBoost()`/
+  `tryConsumePriorityLike()` — same "always read the real DB state, never
+  trust a client claim" discipline as the pre-existing
+  `tryConsumeDailyLike()`, checked-then-decremented so a balance can never go
+  negative (schema `min: 0` is a second, defense-in-depth backstop).
+- **Plan-driven top-ups:** new `Plan.boostCreditsGranted`/`priorityLikesGranted`
+  fields (default `0`), granted additively, ONE TIME, on
+  `POST /api/subscription/subscribe`
+  (`backend/utils/entitlementUtils.js#grantPlanCredits()`, isolated in its own
+  try/catch so a grant failure never turns a successful subscribe into an
+  error response). Seeded escalating per tier
+  (`backend/constants/subscriptionOptions.js#DEFAULT_PLANS`): CG Plus +1
+  Boost/+3 Priority Likes, CG Pro +3/+8, CG Elite +5/+15. **Honestly scoped:
+  a one-time grant, not a recurring monthly top-up** — there is no job
+  scheduler anywhere in this codebase (no `node-cron`, no task queue) to
+  detect a renewal and re-grant; see `MOCK_FEATURES.md`'s new Task #16 entry
+  for the full writeup.
+- **Ranking integration — the mechanically interesting part
+  (`backend/utils/discoveryRankingUtils.js`):** two flat, deliberately
+  NON-weighted, NON-clamped bonuses added on top of Task #19's existing
+  four-signal weighted `rankScore` — `+30` (`BOOST_RANK_BONUS`) for any
+  candidate with a currently-active Boost, `+25` (`PRIORITY_LIKE_RANK_BONUS`)
+  for a candidate who has priority-liked THIS specific viewer and hasn't
+  been swiped back on yet. Both can stack (`+55` total) — two independent,
+  genuinely-earned reasons to rank higher compound rather than cap each
+  other out. Deliberately additive rather than folded into the four
+  admin-tunable weights (which must sum to `~1.0`) — a boost/priority-like
+  bonus is a "reliably outranks regardless of tuning" guarantee, not a share
+  of a 100% budget. `rankScore` itself was already never returned to the
+  client (only `compatibility` is) and already had no clamp, so letting it
+  exceed 100 when boosted is harmless.
+- **`backend/routes/discovery.js`:** `GET /feed` resolves both bonuses via
+  exactly TWO bulk queries against the pool's user ids — `getActiveBoostedUserIds()`
+  (one `Boost.find({...}).distinct('user')`) and one indexed
+  `Like.find({ fromUser: $in pool, toUser: me, action: 'like', priority: true }).distinct('fromUser')`
+  — never N+1, and critically, both run strictly AFTER `eligiblePool` has
+  already been produced by Task #14's hard `filter` (bidirectional gender/
+  age, distance, dating-intention, verified-only, incognito, blocks,
+  already-swiped/matched, suspended). **Explicitly re-verified this pass, not
+  just inherited:** the bonuses can only ever change a candidate's position
+  within `eligiblePool`, never add to or remove from it — confirmed both by
+  re-reading the route code (the bonus computation has no code path back
+  into the MongoDB query that built `eligiblePool`) and by the verification
+  script's Part E, which fixtures a candidate that is BOTH boosted AND
+  blocked by the viewer and confirms it is excluded from the feed entirely.
+- **Frontend:** `Discovery.jsx` gained Boost activation UI, a Priority Like
+  swipe action, and credit-balance display; `NotificationBell.jsx` renders
+  the distinguishing Priority Like notification copy;
+  `AuthContext.jsx` gained `refreshUser()` so a screen that just spent a
+  credit can pull a fresh balance without a full page reload (also, `GET
+  /api/auth/me` now returns both balances directly). `api.js` gained the
+  corresponding client calls.
+- **Tests performed:** Backend — `node -e "require('./server.js')"` boots
+  cleanly on port 5000; live `curl` against `GET /api/boosts/status` and
+  `POST /api/boosts/activate` with no `Authorization` header both returned
+  `401`. The already-present, already-correct standalone verification script
+  (`backend/__verify_task16.js`, run from inside `backend/`, same
+  fake-model-over-real-route-over-real-HTTP pattern this project has used
+  since Task #6, deleted before commit per this project's established
+  convention) — 58/58 checks passed across six parts: (A) pure-function
+  `computeRankScore()` bonus-math checks (exact `+30`/`+25`/`+55`, defaults
+  unchanged for old callers); (B) schema `validateSync()` checks on all four
+  new/extended models; (C) HTTP-level Boost activate/status lifecycle
+  (30-min duration, credit decrement + persistence, `409` double-activate,
+  `402` at 0 credits, `401` with no auth); (D) HTTP-level Priority Like swipe
+  path (credit decrement, `Like.priority` persisted, `402` at 0 credits,
+  `400` on `priority` + `'pass'`, `400` on non-boolean `priority`, ordinary
+  likes unaffected); (E) HTTP-level `GET /feed` ranking integration (boosted
+  candidate ranks first, priority-liker of the viewer ranks above an
+  otherwise-identical plain candidate, the bonus does NOT apply for a
+  different non-liked viewer, and — the eligibility check — a
+  blocked-but-boosted candidate is excluded from the feed entirely); (F)
+  `grantPlanCredits()` additive top-up + no-op on a 0/0-grant plan. Frontend
+  — `npm run build` clean (`dist/` produced, 402.81 kB main bundle);
+  `npm run lint` (oxlint) — 0 errors, the same 2 pre-existing
+  `only-export-components` warnings carried forward (also present,
+  unrelated to this task, in the untouched `NotificationContext.jsx`), no
+  new warnings.
+- **Docs updated:** `docs/API_DOCUMENTATION.md` (new §15 — Profile Boost +
+  Priority Like, full route contract; §3's ranking section extended; `GET
+  /api/auth/me` and `POST /api/subscription/subscribe` response shapes
+  extended), `docs/DATABASE_SCHEMA.md` (`boosts` section filled in from its
+  prior "not implemented" placeholder; `users`/`likes`/`plans`/`matches`
+  sections extended), `docs/BUSINESS_PLAN.md` (new Revenue Model bullet),
+  `MOCK_FEATURES.md` (new entry — one-time-not-recurring credit grants),
+  `PROJECT_STATE.md` (full rewrite of "Current Task"/status fields/"Next
+  Exact Task"), this file.
+- **Next task:** No further V2 items are currently queued by the user — Task
+  #16 was the last item in this user's post-MVP feature-request batch (per
+  the task instructions this pass was run under; see `PROJECT_STATE.md`'s
+  "Next Exact Task" for the full reasoning and caveat about this session's
+  lack of direct TaskList access). Recommended next focus: either the
+  "Before real production launch" hardening list in `TODO.md` (live MongoDB
+  Atlas testing, real third-party credentials, an automated test suite,
+  closing BUG-001), or whatever the user requests next.
+
+---
+
 ## 2026-08-18 — Weighted discovery ranking algorithm (Task #19, V2, user-requested)
 
 - **Phase:** Phase 12 — Growth & Engagement Features (`docs/ROADMAP.md`). V2 feature

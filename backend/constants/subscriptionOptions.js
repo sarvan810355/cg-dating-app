@@ -76,6 +76,20 @@ const FREE_TIER_DAILY_LIKE_LIMIT = 20;
 // placeholder numbers, admin-editable after seeding via direct DB edits
 // until an Admin panel pricing screen exists (not built in this pass — see
 // TODO.md's Admin section, which is a separate task from this one).
+// Task #16 — Profile Boost + Priority Like (V2 scope, one-time credit grant
+// on subscribe — see backend/models/Plan.js's `boostCreditsGranted`/
+// `priorityLikesGranted` and backend/utils/entitlementUtils.js#grantPlanCredits()).
+// Arbitrary but deliberately escalating MVP placeholder numbers (same
+// "seed data, admin-editable after seeding" caveat as pricing above) —
+// roughly a "handful per tier" scaled with the tier's own price step, so a
+// higher plan visibly buys more of both premium mechanics in addition to its
+// feature-flag differences. `CG_PLUS` doesn't already list `'boost'` in its
+// `features` array (that's a separate, currently-unenforced flag — see the
+// `boost`/`see_who_liked_you` note above) but still gets a small boost/
+// priority-like credit grant here, since credits are their own independent
+// consumable mechanic, not gated by the `features` array at all — a plan
+// only needs `boostCreditsGranted`/`priorityLikesGranted` > 0 to hand out
+// credits, regardless of what's in `features`.
 const DEFAULT_PLANS = [
   {
     code: 'CG_PLUS',
@@ -84,6 +98,8 @@ const DEFAULT_PLANS = [
     billingPeriod: 'monthly',
     features: ['unlimited_likes', 'advanced_filters'],
     isActive: true,
+    boostCreditsGranted: 1,
+    priorityLikesGranted: 3,
   },
   {
     code: 'CG_PRO',
@@ -92,6 +108,8 @@ const DEFAULT_PLANS = [
     billingPeriod: 'monthly',
     features: ['unlimited_likes', 'advanced_filters', 'see_who_liked_you', 'boost'],
     isActive: true,
+    boostCreditsGranted: 3,
+    priorityLikesGranted: 8,
   },
   {
     code: 'CG_ELITE',
@@ -106,6 +124,8 @@ const DEFAULT_PLANS = [
       'incognito',
     ],
     isActive: true,
+    boostCreditsGranted: 5,
+    priorityLikesGranted: 15,
   },
 ];
 

@@ -171,6 +171,26 @@ const UserSchema = new mongoose.Schema(
       default: null,
       immutable: true,
     },
+
+    // --- Profile Boost + Priority Like (Task #16 — V2 scope, see
+    // docs/DATABASE_SCHEMA.md's `boosts` section and
+    // backend/constants/boostOptions.js). Both are simple, fungible
+    // consumable-credit counters — the same "1:1-with-user, always-fetched-
+    // together account state" reasoning already used for
+    // `dailyLikeCount`/`referralCode` above — NOT source-tracked per credit
+    // (see boostOptions.js#BOOST_SOURCES's comment on that trade-off).
+    // `default: 1` on both: every new signup gets one free taster of each
+    // premium mechanic (see boostOptions.js#FREE_BOOST_CREDITS/
+    // FREE_PRIORITY_LIKES for the documented reasoning) — a deliberate
+    // product choice, not an oversight; a plan subscription tops these up
+    // further (see backend/routes/subscription.js's POST /subscribe). `min:
+    // 0` is defense-in-depth against ever persisting a negative balance —
+    // the actual "can't go negative" guarantee is enforced by
+    // backend/utils/entitlementUtils.js's tryActivateBoost()/
+    // tryConsumePriorityLike() only ever decrementing after confirming a
+    // remaining balance > 0, this is a second, schema-level backstop. ---
+    boostCreditsRemaining: { type: Number, default: 1, min: 0 },
+    priorityLikesRemaining: { type: Number, default: 1, min: 0 },
   },
   { timestamps: true }
 );
