@@ -7,6 +7,7 @@ const {
   DRINKING_OPTIONS,
   DIET_OPTIONS,
   PERSONALITY_PROMPTS,
+  INSTAGRAM_HANDLE_REGEX,
 } = require('../constants/profileOptions');
 const { computeProfileCompletion } = require('../utils/profileUtils');
 
@@ -89,6 +90,26 @@ const ProfileSchema = new mongoose.Schema(
 
     // --- Personality prompts (fixed prompt bank, see constants/profileOptions.js) ---
     personalityPrompts: { type: [PromptAnswerSchema], default: [] },
+
+    // --- Instagram handle (post-MVP, user-requested; see MOCK_FEATURES.md) ---
+    // Self-reported only, NOT verified via Instagram OAuth (no Meta Developer
+    // app registered for this project) — same trust level as bio/interests.
+    // Stored as-entered after stripping a leading '@' and trimming whitespace
+    // (backend/routes/profile.js does the normalization); NOT force-lowercased
+    // since Instagram usernames are case-insensitive for lookup but often
+    // displayed in the case the user set. Format re-validated here too
+    // (defense-in-depth, not just the route layer) against Instagram's real
+    // username rules: letters, numbers, periods, underscores, 1-30 chars.
+    instagramHandle: {
+      type: String,
+      trim: true,
+      default: null,
+      validate: {
+        validator: (v) => v === null || v === '' || INSTAGRAM_HANDLE_REGEX.test(v),
+        message:
+          'instagramHandle must be 1-30 characters using only letters, numbers, periods, and underscores',
+      },
+    },
 
     // --- Photos ---
     // MOCK/TEMPORARY: Cloudinary is not wired up yet (no credentials configured).

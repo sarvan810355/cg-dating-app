@@ -26,6 +26,12 @@ function isAtLeastMinAge(dateOfBirth, now = new Date()) {
 // simple: each section is either "filled" or not, weighted by how much it
 // matters to a usable profile. Recomputed on every save (see Profile model
 // pre-save hook) rather than trusted from client input.
+// NOTE: the required-for-a-usable-profile sections above already sum to 100,
+// so `instagram` below is a genuine bonus, never a requirement — it can only
+// push an already-100% profile over the cap, which `Math.min(100, ...)`
+// below absorbs. A profile with everything else filled still reaches 100%
+// without ever linking Instagram (post-MVP, self-reported field — see
+// MOCK_FEATURES.md's Instagram-linking entry).
 const COMPLETION_WEIGHTS = {
   basicInfo: 20, // displayName + dateOfBirth + gender
   datingIntention: 10,
@@ -35,6 +41,7 @@ const COMPLETION_WEIGHTS = {
   interests: 10, // at least 3 interests
   prompts: 10, // at least 1 answered prompt
   lifestyleAndLanguages: 5,
+  instagram: 5, // bonus only, see note above
 };
 
 function computeProfileCompletion(profile) {
@@ -69,6 +76,9 @@ function computeProfileCompletion(profile) {
   const hasLanguages = Array.isArray(profile.languages) && profile.languages.length > 0;
   if (hasLifestyle || hasLanguages) {
     score += COMPLETION_WEIGHTS.lifestyleAndLanguages;
+  }
+  if (profile.instagramHandle && String(profile.instagramHandle).trim().length > 0) {
+    score += COMPLETION_WEIGHTS.instagram;
   }
 
   return Math.min(100, Math.round(score));

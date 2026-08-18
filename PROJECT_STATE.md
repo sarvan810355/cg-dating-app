@@ -1,11 +1,29 @@
 Project: CG-Dating-App
 Current Phase: MVP (Phases 0-10 per docs/ROADMAP.md) is **complete**. Task #6 (Final
-polish, security audit, documentation wrap-up — this pass) closes out the last of the
-12 internal tasks that made up the MVP build. Phases 13/14/15 (Testing, full Security
-Hardening, Deployment) remain cross-cutting work not yet started — see "Remaining
-Features" below and docs/ROADMAP.md.
-Current Task: Task #6 — Final polish, security/performance audit, documentation
-wrap-up (this pass, the last of the MVP build). Scope actually covered: (1) full
+polish, security audit, documentation wrap-up) closed out the last of the 12 internal
+tasks that made up the MVP build. Since then, one post-MVP feature was added by
+explicit user request: Instagram profile linking (self-reported handle, not OAuth —
+see "Current Task" below and MOCK_FEATURES.md). Phases 13/14/15 (Testing, full
+Security Hardening, Deployment) remain cross-cutting work not yet started — see
+"Remaining Features" below and docs/ROADMAP.md.
+Current Task: **Post-MVP feature addition (not one of the original 12 tasks):
+Instagram profile linking**, added 2026-08-18 by explicit user request after the MVP
+had already shipped. Self-reported `instagramHandle` field on Profile — **not real
+Instagram OAuth** (no Meta Developer app registered for this project, same
+mocked-external-integration pattern as SMS/OTP, Cloudinary, Razorpay, FCM). Backend:
+`backend/models/Profile.js` (new nullable field + schema-level format validator),
+`backend/routes/profile.js` (extended the existing `PUT /api/profile/me` partial-merge
+body, no new endpoint), `backend/utils/profileSerializers.js` (included in both the
+own- and public-profile serializers — also surfaces on the discovery feed, which
+reuses the public serializer directly), `backend/utils/profileUtils.js` (+5 bonus to
+`profileCompletionPercentage` when filled, never required). Frontend:
+`frontend/src/pages/ProfileBuilder.jsx` (new "Social" section, client-side validation
+mirroring the backend regex), `frontend/src/pages/Discovery.jsx` (a small `📷 @handle`
+badge linking out to Instagram, `target="_blank"`/`rel="noopener noreferrer"` — the
+only existing "view someone else's public profile" surface in this codebase). See
+`IMPLEMENTATION_PROGRESS.md`'s newest entry for the full verification detail.
+Before this, Task #6 — Final polish, security/performance audit, documentation
+wrap-up (the last of the original MVP build). Scope actually covered: (1) full
 build/lint/boot verification pass across frontend and backend; (2) a security audit
 against docs/ARCHITECTURE.md's security requirements and docs/TESTING_STRATEGY.md's
 security checklist, with two real findings fixed directly (see below) and one larger
@@ -82,7 +100,21 @@ filtering yet. Chat is text-only. Report evidence is plain strings, no file uplo
 automated test suite exists in either backend/ or frontend/ (see
 docs/TESTING_STRATEGY.md). BUG-001 (rate limiting/security headers beyond auth) is
 newly tracked in this pass — see above.
-Last Successful Test (Task #6, this pass): Frontend — `npm install` (no changes),
+Last Successful Test (Instagram linking, this pass): Backend — `node -e
+"require('./server.js')"` boots cleanly, no import/syntax errors; `GET /api/health`
+200; `curl -X PUT /api/profile/me` with no `Authorization` header still returns 401.
+A standalone Node script (deleted before commit, per this project's established
+convention) loaded the real `constants/profileOptions.js`, `models/Profile.js` (via
+`validateSync()`, no DB connection), `utils/profileSerializers.js`, and
+`utils/profileUtils.js` directly: confirmed the `instagramHandle` format regex
+accepts/rejects the documented edge cases, the Mongoose schema validator matches it,
+the route-level `@`-stripping/trimming normalization behaves as documented, both
+serializers include the field (returning `null` rather than `undefined` when unset),
+and the completion-score bonus is exactly +5 and never required to reach 100%. All
+checks passed. Frontend — `npm run build` clean; `npm run lint` (oxlint) — 0 errors,
+same 2 pre-existing warnings carried forward. See IMPLEMENTATION_PROGRESS.md's
+newest entry for the full detail.
+Last Successful Test (Task #6, prior pass): Frontend — `npm install` (no changes),
 `npm run build` (clean, `dist/index.html` + JS/CSS chunks produced, no errors),
 `npm run lint` (oxlint — 0 errors, the same 2 pre-existing `only-export-components`
 warnings on AuthContext.jsx/NotificationContext.jsx carried forward from every prior
@@ -116,7 +148,17 @@ empty states confirmed present on Discovery, Matches, Chat, NotificationBell, an
 four Admin screens (all funnel through `frontend/src/api.js`'s single `request()`
 helper, which attaches `.status`/`.data` to thrown errors consistently) — no changes
 needed.
-Last Modified Files (Task #6, this pass): backend/models/User.js (password field now
+Last Modified Files (Instagram linking, this pass): backend/constants/
+profileOptions.js (new INSTAGRAM_HANDLE_REGEX), backend/models/Profile.js (new
+instagramHandle field + validator), backend/routes/profile.js (PUT /me accepts
+instagramHandle), backend/utils/profileSerializers.js (both serializers include it),
+backend/utils/profileUtils.js (+5 completion-score bonus), frontend/src/constants/
+profileOptions.js (mirrored regex + normalizeInstagramHandle helper),
+frontend/src/pages/ProfileBuilder.jsx (new Social section), frontend/src/pages/
+Discovery.jsx (Instagram badge on the discovery card), docs/DATABASE_SCHEMA.md,
+docs/API_DOCUMENTATION.md, MOCK_FEATURES.md, TODO.md, this file,
+IMPLEMENTATION_PROGRESS.md.
+Last Modified Files (Task #6, prior pass): backend/models/User.js (password field now
 `select: false`), backend/routes/auth.js (login route: `.select('+password')`; both
 signup/login routes: rate limiter middleware applied), backend/middleware/
 rateLimiters.js (new — loginLimiter/signupLimiter), backend/package.json /
@@ -124,7 +166,9 @@ package-lock.json (bcrypt 5.1.1 → 6.0.0, express-rate-limit added), docs/
 SECURITY_AUDIT.md (new), BUGS.md (BUG-001 added), PROJECT_STATE.md (this file),
 IMPLEMENTATION_PROGRESS.md, TODO.md, MOCK_FEATURES.md, README.md, docs/ROADMAP.md (all
 updated to reflect final MVP-complete state — see git log for the exact diff).
-Database Status: MongoDB/Mongoose schemas implemented for User, Profile, Like, Match,
+Database Status: Profile gained a new `instagramHandle` field (post-MVP, self-reported
+Instagram linking — see "Current Task" above); otherwise unchanged. MongoDB/Mongoose
+schemas implemented for User, Profile, Like, Match,
 Message, Notification, Block, Report, Plan, Subscription, and AuditLog; no live DB
 connection has ever been verified in any sandbox session across this entire project —
 this remains the top technical-debt item (see "Known Technical Debt" and TODO.md's

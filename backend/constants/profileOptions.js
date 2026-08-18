@@ -56,6 +56,15 @@ const MAX_INTERESTS = 15;
 const MAX_PROMPTS = 5;
 const BIO_MAX_LENGTH = 500;
 
+// Instagram handle linking (post-MVP, user-requested — see MOCK_FEATURES.md).
+// Self-reported only, NOT real Instagram OAuth (no Meta Developer app
+// registered for this project — same "mocked external integration" pattern
+// already used for SMS/OTP, Cloudinary, Razorpay, FCM). Format mirrors
+// Instagram's real username rules: letters, numbers, periods, underscores,
+// 1-30 characters. A leading '@' is stripped before this is checked (and
+// before storage) so either "handle" or "@handle" is accepted as input.
+const INSTAGRAM_HANDLE_REGEX = /^[A-Za-z0-9._]{1,30}$/;
+
 module.exports = {
   MIN_AGE,
   GENDERS,
@@ -70,4 +79,5 @@ module.exports = {
   MAX_INTERESTS,
   MAX_PROMPTS,
   BIO_MAX_LENGTH,
+  INSTAGRAM_HANDLE_REGEX,
 };

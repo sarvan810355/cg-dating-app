@@ -57,6 +57,22 @@ these are closed.
       is known — not urgent given bearer-token (not cookie) auth, but standard practice
       before a public launch. See `docs/SECURITY_AUDIT.md`'s "Not re-litigated" section.
 
+## Post-MVP feature additions (shipped after the 12-task MVP plan)
+
+Work here was requested by the user after the MVP (Task #6) had already shipped and
+closed — it's genuinely new feature scope, not a gap in one of the original 12 tasks
+tracked below.
+
+- [x] **Instagram profile linking** (2026-08-18) — self-reported `instagramHandle` on
+      `Profile` (`backend/models/Profile.js`), validated both client- and server-side
+      against Instagram's real username format, editable via the existing
+      `PUT /api/profile/me` (no new endpoint), returned by both the own- and
+      public-profile serializers, and shown as a clickable badge (profile builder +
+      Discovery card). **Not real Instagram OAuth** — no Meta Developer app is
+      registered for this project, so there is no verification that a user actually
+      owns the handle they typed in; see `MOCK_FEATURES.md`'s entry and this file's
+      V2 section ("real Instagram OAuth / ownership verification").
+
 ## MVP — Done
 
 All of Phases 0-10 (`docs/ROADMAP.md`) shipped. Items below are kept exactly as
@@ -260,6 +276,11 @@ unchecked line means the whole feature is unbuilt).
 - [ ] Referral program (Invite & Earn)
 - [ ] Real Razorpay payment integration (replace MOCK)
 - [ ] Voice call / video call in chat
+- [ ] Real Instagram OAuth / "Login with Instagram" verification — replaces the
+      self-reported `instagramHandle` field added post-MVP (see below and
+      `MOCK_FEATURES.md`). Requires registering a Meta Developer app for this
+      project (client ID/secret, redirect URI) and, beyond a handful of test
+      users, Meta's app review process — none of which exists yet.
 
 ## V3 (longer-term)
 

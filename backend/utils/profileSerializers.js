@@ -27,6 +27,7 @@ function toOwnProfileJSON(profile) {
     languages: obj.languages,
     lifestyle: obj.lifestyle,
     personalityPrompts: obj.personalityPrompts,
+    instagramHandle: obj.instagramHandle || null,
     photos: obj.photos.map((p) => ({ id: p._id, url: p.url, isPrimary: p.isPrimary })),
     profileCompletionPercentage: obj.profileCompletionPercentage,
     completionHints: getCompletionHints(obj),
@@ -66,6 +67,15 @@ function toPublicProfileJSON(profile, verificationUser = null) {
     languages: obj.languages,
     lifestyle: obj.lifestyle,
     personalityPrompts: obj.personalityPrompts,
+    // Not a private/sensitive field — self-reported and meant to be shared,
+    // same trust level as bio (see MOCK_FEATURES.md's Instagram-linking
+    // entry). Included here rather than forked out to a smaller field set
+    // because this same function already backs the full discovery-feed card
+    // (backend/routes/discovery.js) as well as GET /api/profile/:userId —
+    // the match-list card (backend/routes/matches.js) builds its own
+    // deliberately minimal shape and doesn't include this, same as it
+    // already omits bio.
+    instagramHandle: obj.instagramHandle || null,
     photos: obj.photos.map((p) => ({ url: p.url, isPrimary: p.isPrimary })),
     ...toPublicVerificationBadges(verificationUser),
   };

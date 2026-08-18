@@ -19,6 +19,7 @@ const {
   MAX_INTERESTS,
   MAX_PROMPTS,
   BIO_MAX_LENGTH,
+  INSTAGRAM_HANDLE_REGEX,
 } = require('../constants/profileOptions');
 
 const router = express.Router();
@@ -216,6 +217,26 @@ function validateProfileInput(body, { isCreate }) {
       }
       if (!errors.some((e) => e.startsWith('personalityPrompts'))) {
         updates.personalityPrompts = prompts;
+      }
+    }
+  }
+
+  // Instagram handle (post-MVP, self-reported only — see MOCK_FEATURES.md).
+  // Accepts either "handle" or "@handle"; a leading '@' is stripped before
+  // validation/storage. Sending an empty string clears a previously-set
+  // handle (same "empty clears it" convention as bio/city below).
+  if (body.instagramHandle !== undefined) {
+    const raw = body.instagramHandle === null ? '' : String(body.instagramHandle).trim();
+    if (!raw) {
+      updates.instagramHandle = null;
+    } else {
+      const stripped = raw.startsWith('@') ? raw.slice(1) : raw;
+      if (!INSTAGRAM_HANDLE_REGEX.test(stripped)) {
+        errors.push(
+          'instagramHandle must be 1-30 characters using only letters, numbers, periods, and underscores'
+        );
+      } else {
+        updates.instagramHandle = stripped;
       }
     }
   }

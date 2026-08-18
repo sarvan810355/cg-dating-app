@@ -72,3 +72,17 @@ export const MAX_PHOTOS = 6;
 export const MAX_INTERESTS = 15;
 export const MAX_PROMPTS = 5;
 export const BIO_MAX_LENGTH = 500;
+
+// Instagram handle linking (post-MVP, user-requested — see MOCK_FEATURES.md).
+// Self-reported only, NOT real Instagram OAuth. Mirrors
+// backend/constants/profileOptions.js#INSTAGRAM_HANDLE_REGEX exactly —
+// letters, numbers, periods, underscores, 1-30 characters.
+export const INSTAGRAM_HANDLE_REGEX = /^[A-Za-z0-9._]{1,30}$/;
+
+// Strips a leading '@' (either "handle" or "@handle" is accepted as input)
+// and trims whitespace — matches the normalization backend/routes/profile.js
+// applies before validating/storing.
+export function normalizeInstagramHandle(value) {
+  const trimmed = String(value || '').trim();
+  return trimmed.startsWith('@') ? trimmed.slice(1) : trimmed;
+}

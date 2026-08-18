@@ -69,7 +69,7 @@ function DiscoveryCard({ profile, onBlocked }) {
           <p className="mb-3 line-clamp-3 text-sm text-text-primary">{profile.bio}</p>
         )}
         {profile.interests?.length > 0 && (
-          <div className="flex flex-wrap gap-2">
+          <div className="mb-3 flex flex-wrap gap-2">
             {profile.interests.slice(0, 3).map((interest) => (
               <span
                 key={interest}
@@ -79,6 +79,20 @@ function DiscoveryCard({ profile, onBlocked }) {
               </span>
             ))}
           </div>
+        )}
+        {profile.instagramHandle && (
+          // Post-MVP, user-requested — self-reported only, not verified
+          // ownership (see MOCK_FEATURES.md). Stops propagation so tapping
+          // the badge doesn't trigger anything the card wraps it in.
+          <a
+            href={`https://www.instagram.com/${profile.instagramHandle}/`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex w-fit items-center gap-1 rounded-full border border-border px-2.5 py-1 text-xs font-medium text-primary hover:bg-primary-subtle"
+          >
+            📷 @{profile.instagramHandle}
+          </a>
         )}
       </div>
     </div>

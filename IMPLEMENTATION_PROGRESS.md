@@ -10,6 +10,84 @@ next task that follows from it.
 
 ---
 
+## 2026-08-18 — Instagram profile linking (post-MVP, user-requested)
+
+- **Phase:** Post-MVP feature addition — requested by the user after the MVP (all 12
+  internal tasks, closed out by the entry below) had already shipped. Not part of the
+  original 12-task plan; see `TODO.md`'s new "Post-MVP feature additions" section.
+- **Task:** Add self-reported Instagram profile linking. **Scope decision (made up
+  front, not re-litigated during the build):** a self-reported handle, not real
+  Instagram OAuth — there is no Meta Developer app registered for this project (no
+  client ID/secret, no redirect URI), and implementing real "Login with Instagram"
+  would require Meta's external app-review process, which isn't in place. This
+  mirrors the same mocked/simplified pattern already used for every other external
+  integration in this codebase (SMS/OTP, Cloudinary, Razorpay, FCM — see
+  `MOCK_FEATURES.md`).
+- **Backend:** `instagramHandle` (nullable string, default `null`) added to
+  `backend/models/Profile.js`, with a schema-level format validator
+  (`backend/constants/profileOptions.js#INSTAGRAM_HANDLE_REGEX` — 1-30 chars,
+  letters/numbers/periods/underscores, matching Instagram's real username rules) as
+  defense-in-depth on top of route validation. `PUT /api/profile/me`
+  (`backend/routes/profile.js`) extended to accept `instagramHandle` in the existing
+  partial-merge body — no new endpoint — following the exact validate-then-`updates`
+  pattern already used for every other optional field; a leading `@` is stripped
+  before storage, the value is otherwise stored as-entered (not force-lowercased),
+  and an empty string clears a previously-set handle. Both
+  `toOwnProfileJSON`/`toPublicProfileJSON` (`backend/utils/profileSerializers.js`)
+  now include `instagramHandle` — since `backend/routes/discovery.js`'s feed already
+  reuses `toPublicProfileJSON` directly for its full card, the handle appears there
+  too; `backend/routes/matches.js`'s match-list card builds its own deliberately
+  minimal shape (it already omits `bio`) and was left unchanged for the same
+  space-constrained reasoning. `backend/utils/profileUtils.js#computeProfileCompletion`
+  gained a small `+5` bonus (`COMPLETION_WEIGHTS.instagram`) for a filled handle — the
+  other weighted sections already sum to 100, so this is a genuine bonus, never a
+  requirement (`Math.min(100, ...)` absorbs the overflow on an otherwise-full
+  profile).
+- **Frontend:** `frontend/src/constants/profileOptions.js` gained a mirrored
+  `INSTAGRAM_HANDLE_REGEX` + a `normalizeInstagramHandle()` helper (strip leading
+  `@`, trim). `frontend/src/pages/ProfileBuilder.jsx` gained a new "Social" section
+  (reusing `TextField`/`Button`, no new styling patterns) with client-side format
+  validation before save (mirrors the backend regex exactly) and a live badge preview
+  once a valid handle is typed. `frontend/src/pages/Discovery.jsx`'s `DiscoveryCard`
+  (the only existing "view someone else's public profile" surface in this codebase —
+  there is no separate profile-detail screen/route yet, `GET /api/profile/:userId`
+  exists in `frontend/src/api.js` as `getUserProfile()` but nothing calls it) gained a
+  small `📷 @handle` badge linking to `https://www.instagram.com/<handle>/`
+  (`target="_blank"`, `rel="noopener noreferrer"`) — a plain text badge, not an
+  embedded/sourced Instagram logo asset, per the design-system guidance against
+  introducing new asset types.
+- **Tests performed:** Backend — `node -e "require('./server.js')"` boots cleanly, no
+  import/syntax errors; `GET /api/health` 200; `curl -X PUT /api/profile/me` with no
+  `Authorization` header returns 401 (auth gate unaffected). A standalone Node script
+  (`backend/__verify_instagram.js`, deleted before this commit per this project's
+  established convention) loaded the real `constants/profileOptions.js`,
+  `models/Profile.js` (via `validateSync()`, no DB connection), `utils/
+  profileSerializers.js`, and `utils/profileUtils.js` directly and checked: the regex
+  accepts/rejects the documented edge cases (valid handles, empty string, 31-char
+  handle, spaces, punctuation outside `._`, emoji); the Mongoose schema validator
+  matches the regex exactly; the route's stripping/trimming normalization behaves as
+  documented (`"@handle"` → `"handle"`, whitespace trimmed, case preserved, empty
+  string → `null`, `@` + 31 chars still rejected after stripping); both serializers
+  include `instagramHandle` (and return `null`, not `undefined`, when unset); the
+  completion-score bonus is exactly `+5` on a partial profile and never pushes an
+  already-100% profile above the cap or makes an otherwise-empty profile complete.
+  All checks passed. Frontend — `npm run build` clean (no errors); `npm run lint`
+  (oxlint) — 0 errors, the same 2 pre-existing `only-export-components` warnings
+  carried forward, no new warnings.
+- **Files touched:** `backend/constants/profileOptions.js`, `backend/models/
+  Profile.js`, `backend/routes/profile.js`, `backend/utils/profileSerializers.js`,
+  `backend/utils/profileUtils.js`, `frontend/src/constants/profileOptions.js`,
+  `frontend/src/pages/ProfileBuilder.jsx`, `frontend/src/pages/Discovery.jsx`,
+  `docs/DATABASE_SCHEMA.md`, `docs/API_DOCUMENTATION.md`, `MOCK_FEATURES.md`,
+  `TODO.md`, `PROJECT_STATE.md`, this file.
+- **Next task:** None specifically required by this addition — it's additive and
+  self-contained. The broader "Before real production launch" list in `TODO.md`
+  (live MongoDB, real provider credentials, automated tests, etc.) is unchanged and
+  still gates any real deploy; real Instagram OAuth/ownership verification is now
+  tracked as a V2 item in `TODO.md`.
+
+---
+
 ## 2026-08-18 — Final polish, security audit, and documentation wrap-up (Task #6) — MVP complete
 
 - **Phase:** Cross-cutting wrap-up pass, closing out the last of the 12 internal tasks

@@ -125,7 +125,8 @@ browsing in this app.
     "interests": ["Cricket", "Cooking"],
     "languages": ["Hindi", "Chhattisgarhi"],
     "lifestyle": { "smoking": "no", "drinking": "socially", "diet": "vegetarian" },
-    "personalityPrompts": [{ "prompt": "My love language is...", "answer": "..." }]
+    "personalityPrompts": [{ "prompt": "My love language is...", "answer": "..." }],
+    "instagramHandle": "cg_dating_user"
   }
   ```
 - **Validation:**
@@ -143,6 +144,19 @@ browsing in this app.
     `personalityPrompts` max 5 entries, `prompt` must be from the fixed prompt bank
     (`backend/constants/profileOptions.js`), `answer` max 300 chars, no duplicate
     prompts.
+  - `instagramHandle` (post-MVP, user-requested — see `MOCK_FEATURES.md`): 1-30
+    characters, letters/numbers/periods/underscores only (matches Instagram's real
+    username rules), enforced both client-side and server-side
+    (`backend/constants/profileOptions.js#INSTAGRAM_HANDLE_REGEX`, checked in both
+    `backend/routes/profile.js` and as a schema-level validator on
+    `backend/models/Profile.js`). A leading `@` is accepted and stripped before
+    storage (`"@cg_user"` and `"cg_user"` both store as `"cg_user"`); the value is
+    stored **as-entered otherwise** (not force-lowercased — Instagram usernames are
+    case-insensitive for lookup but often displayed in the case the user set).
+    Sending an empty string clears a previously-set handle. **This is a
+    self-reported field, not real Instagram OAuth** — there is no ownership
+    verification that the caller actually controls the handle they enter (no Meta
+    Developer app is registered for this project); see `MOCK_FEATURES.md`.
 - **Success response:** `200 OK` (update) or `201 Created` (first creation) —
   `{ "profile": { ... } }`.
 - **Errors:** `400` — validation failure (`{ "message", "errors": [...] }` with all
@@ -154,7 +168,9 @@ browsing in this app.
   coordinates (only `city`/`district`), no `dateOfBirth` (only the derived `age`).
   Also includes `mobileVerified`/`photoVerified` booleans (Task #9 —
   Verification, see Section 6 below) — never the raw phone number or
-  submitted selfie.
+  submitted selfie. Also includes `instagramHandle` (or `null`) — not treated as
+  private/sensitive, it's meant to be shared, same trust level as `bio`; see the
+  `instagramHandle` note under `PUT /api/profile/me` above.
 - **Errors:** `400` — `userId` is not a valid id; `404` — no profile for that user.
 
 ### `POST /api/profile/me/photos`
@@ -176,10 +192,20 @@ browsing in this app.
 `id`, `userId`, `displayName`, `dateOfBirth`, `age` (derived, never stored/editable
 directly), `gender`, `interestedIn`, `datingIntention`, `city`, `district`, `state`,
 `profession`, `education`, `bio`, `interests`, `languages`, `lifestyle`,
-`personalityPrompts`, `photos` (`[{ id, url, isPrimary }]`), `profileCompletionPercentage`
-(0-100, recomputed server-side on every save), `completionHints` (array of short
-strings, most-impactful first, e.g. `"Add a bio to improve your profile"`),
-`createdAt`, `updatedAt`.
+`personalityPrompts`, `instagramHandle` (string or `null`; see the validation note
+under `PUT /api/profile/me` above — post-MVP, self-reported, not OAuth-verified),
+`photos` (`[{ id, url, isPrimary }]`), `profileCompletionPercentage`
+(0-100, recomputed server-side on every save; a filled `instagramHandle` contributes
+a small bonus, see `backend/utils/profileUtils.js#COMPLETION_WEIGHTS` — it is never
+required to reach 100%), `completionHints` (array of short strings, most-impactful
+first, e.g. `"Add a bio to improve your profile"`), `createdAt`, `updatedAt`.
+
+`instagramHandle` is also included in the smaller public field set returned by
+`GET /api/profile/:userId` and in discovery feed cards (`GET /api/discovery/feed`,
+which reuses the same public-profile serializer) — see
+`backend/utils/profileSerializers.js`. It is **not** included in the deliberately
+minimal match-list card (`GET /api/matches`), which also omits `bio` for the same
+"condensed card" reason.
 
 ### Not yet implemented (moved out of this phase)
 - `PUT /api/profile/preferences` and a dedicated `preferences` collection — folded

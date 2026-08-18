@@ -108,6 +108,25 @@ Public-facing dating profile, 1:1 with `users`. Implemented in
   (`PERSONALITY_PROMPTS` in `backend/constants/profileOptions.js`) rather than a
   `promptId` reference into a separate `prompts` collection — same simplification
   rationale as `interests` above.
+- `instagramHandle` (string, nullable, default `null`) — **`[NEW, post-MVP,
+  user-requested — added after the MVP shipped, not part of the original
+  12-task plan]`.** Self-reported Instagram username, **not real Instagram
+  OAuth** — there is no Meta Developer app registered for this project (no
+  client ID/secret, no redirect URI), so "Login with Instagram" / ownership
+  verification isn't implemented, same reasoning already applied to this
+  codebase's other mocked external integrations (SMS/OTP, Cloudinary,
+  Razorpay, FCM — see `MOCK_FEATURES.md`). Validated against Instagram's real
+  username format (1-30 chars, letters/numbers/periods/underscores only,
+  `backend/constants/profileOptions.js#INSTAGRAM_HANDLE_REGEX`) both
+  client-side and server-side (route validation in `backend/routes/
+  profile.js` + a schema-level validator here for defense-in-depth). A
+  leading `@` is stripped before storage; the value is otherwise stored
+  as-entered (not force-lowercased — Instagram usernames are
+  case-insensitive for lookup but often displayed in the case the user set).
+  Displayed as a clickable badge linking to
+  `https://www.instagram.com/<handle>/`. Not private/sensitive — included in
+  both the own-profile and public-profile serializers (same trust level as
+  `bio`), see `docs/API_DOCUMENTATION.md`'s Profile section.
 - `photos` (array of `{ url, isPrimary, addedAt }`, max 6, embedded directly in
   the profile document).
   **Divergence:** embedded on `profiles` rather than a separate top-level `photos`

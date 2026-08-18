@@ -124,6 +124,27 @@ resolved by this pass (this pass was audit/polish/docs, not new feature work —
       writeup. **This must not ship to production as-is** — anyone who can call
       `POST /api/subscription/subscribe` while authenticated currently gets any plan
       for free.
+- [ ] **Instagram linking is self-reported only — no OAuth verification that the
+      user owns the handle.** `[NEW, post-MVP, user-requested — added after the
+      MVP shipped, see PROJECT_STATE.md/IMPLEMENTATION_PROGRESS.md's newest
+      entry]`. `PUT /api/profile/me`'s `instagramHandle` field
+      (`backend/models/Profile.js`, `backend/routes/profile.js`) accepts a
+      self-typed Instagram username, validates it against Instagram's real
+      username format (1-30 chars, letters/numbers/periods/underscores,
+      `backend/constants/profileOptions.js#INSTAGRAM_HANDLE_REGEX`), strips a
+      leading `@`, and stores it as-entered otherwise. It is then shown as a
+      clickable badge linking to `https://www.instagram.com/<handle>/`. What's
+      mocked/not built: there is **no verification whatsoever that the caller
+      actually owns the Instagram account they typed in** — this is the exact
+      same trust level as the `bio`/`interests` fields, not an authenticated
+      claim. Real "Login with Instagram" (Instagram Basic Display /
+      Instagram Graph API OAuth) would require registering a Meta Developer
+      app for this project (client ID/secret, a redirect URI, and — for
+      anything beyond a handful of test users — Meta's app review process),
+      none of which exists yet, same gap already true of every other external
+      integration in this codebase (SMS/OTP provider, Cloudinary, Razorpay,
+      FCM — see the entries below). **V2 gap: real "Login with Instagram" /
+      ownership verification** — see `TODO.md`'s V2 section.
 - [ ] **Anthropic Claude API (AI features) — no credentials configured.** AI Icebreakers,
       Why-You-Match, Profile Coach, Date Ideas are all V2 scope and not started.
 - [ ] **Chat is text-only for this pass — not a mock, a documented scope reduction.**

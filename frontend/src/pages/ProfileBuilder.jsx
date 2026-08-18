@@ -17,6 +17,8 @@ import {
   MAX_INTERESTS,
   MAX_PROMPTS,
   BIO_MAX_LENGTH,
+  INSTAGRAM_HANDLE_REGEX,
+  normalizeInstagramHandle,
 } from '../constants/profileOptions';
 
 const EMPTY_FORM = {
@@ -34,6 +36,7 @@ const EMPTY_FORM = {
   languages: [],
   lifestyle: { smoking: '', drinking: '', diet: '' },
   personalityPrompts: [],
+  instagramHandle: '',
 };
 
 function toDateInputValue(dob) {
@@ -147,6 +150,7 @@ function ProfileBuilder() {
             diet: p.lifestyle?.diet || '',
           },
           personalityPrompts: p.personalityPrompts || [],
+          instagramHandle: p.instagramHandle || '',
         });
         setPhotos(p.photos || []);
         setCompletion(p.profileCompletionPercentage || 0);
@@ -208,6 +212,18 @@ function ProfileBuilder() {
     e.preventDefault();
     setError('');
     setSuccess('');
+
+    // Client-side mirror of backend/routes/profile.js's instagramHandle
+    // validation — same regex, same "strip a leading @" normalization —
+    // so an invalid handle is caught before the round-trip.
+    const normalizedInstagram = normalizeInstagramHandle(form.instagramHandle);
+    if (normalizedInstagram && !INSTAGRAM_HANDLE_REGEX.test(normalizedInstagram)) {
+      setError(
+        'Instagram username must be 1-30 characters using only letters, numbers, periods, and underscores'
+      );
+      return;
+    }
+
     setSaving(true);
     try {
       const payload = {
@@ -217,11 +233,13 @@ function ProfileBuilder() {
           drinking: form.lifestyle.drinking || null,
           diet: form.lifestyle.diet || null,
         },
+        instagramHandle: normalizedInstagram || null,
       };
       const data = await api.saveMyProfile(payload);
       setCompletion(data.profile.profileCompletionPercentage);
       setHints(data.profile.completionHints || []);
       setPhotos(data.profile.photos || []);
+      update('instagramHandle', data.profile.instagramHandle || '');
       setSuccess('Profile saved');
     } catch (err) {
       setError(err.message || 'Could not save your profile');
@@ -280,6 +298,10 @@ function ProfileBuilder() {
 
   const usedPrompts = new Set(form.personalityPrompts.map((p) => p.prompt));
   const availablePrompts = PERSONALITY_PROMPTS.filter((p) => !usedPrompts.has(p));
+
+  const instagramPreviewHandle = normalizeInstagramHandle(form.instagramHandle);
+  const instagramPreviewValid =
+    instagramPreviewHandle && INSTAGRAM_HANDLE_REGEX.test(instagramPreviewHandle);
 
   return (
     <div className="min-h-screen bg-background px-4 py-8">
@@ -551,6 +573,31 @@ function ProfileBuilder() {
                 />
               </div>
             </div>
+          </section>
+
+          {/* Social (Instagram handle) — post-MVP, user-requested; see MOCK_FEATURES.md.
+              Self-reported only, not real Instagram OAuth (no Meta Developer app
+              registered for this project — same mock-integration pattern already used
+              for SMS/OTP, Cloudinary, Razorpay). */}
+          <section className="rounded-2xl border border-border bg-surface p-5 space-y-3">
+            <h2 className="text-lg font-semibold text-text-primary">Social</h2>
+            <TextField
+              label="Instagram username"
+              value={form.instagramHandle}
+              onChange={(e) => update('instagramHandle', e.target.value)}
+              placeholder="yourusername"
+              helperText="Optional — shown as a link on your profile. We don't verify you own this account."
+            />
+            {instagramPreviewValid && (
+              <a
+                href={`https://www.instagram.com/${instagramPreviewHandle}/`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex w-fit items-center gap-1 rounded-full bg-primary-subtle px-3 py-1 text-xs font-medium text-primary hover:opacity-80"
+              >
+                📷 @{instagramPreviewHandle}
+              </a>
+            )}
           </section>
 
           {/* Personality prompts */}
