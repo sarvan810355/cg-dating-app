@@ -7,6 +7,7 @@ import NotificationBell from '../components/NotificationBell';
 import SafetyMenu from '../components/SafetyMenu';
 import VerificationBadge from '../components/VerificationBadge';
 import { DATING_INTENTIONS } from '../constants/profileOptions';
+import { MAX_DISTANCE_KM_CAP } from '../constants/discoveryOptions';
 
 function intentionLabel(value) {
   return DATING_INTENTIONS.find((d) => d.value === value)?.label || value;
@@ -58,6 +59,10 @@ function DiscoveryCard({ profile, onBlocked }) {
         {(profile.city || profile.district) && (
           <p className="mb-2 text-sm text-text-secondary">
             {[profile.city, profile.district].filter(Boolean).join(', ')}
+            {/* Task #14 — distance-based match preferences (V2, user-requested).
+                Only shown when both sides have a resolvable location (real or
+                approximate city-center) — see backend/utils/geoUtils.js. */}
+            {profile.distanceKm != null && ` · ${Math.round(profile.distanceKm)} km away`}
           </p>
         )}
         {profile.datingIntention && (
@@ -112,17 +117,53 @@ function Discovery() {
   // see docs/BUSINESS_PLAN.md). Shown as a friendly upgrade prompt instead
   // of a raw error message.
   const [limitReached, setLimitReached] = useState(false);
+  // Task #14 — one-off "search wider" override (V2, user-requested: location
+  // preference filtering). Does NOT persist to the caller's saved
+  // preferences (PUT /api/profile/me) — it's a per-request query-param
+  // override on GET /api/discovery/feed, exactly the "search wider" UX the
+  // task spec called for. Reset your saved radius on the dedicated
+  // Discovery Preferences page (Settings) if you want this to stick.
+  const [searchWider, setSearchWider] = useState(false);
 
-  const loadPage = useCallback(async (nextPage) => {
-    try {
-      const data = await api.getDiscoveryFeed({ page: nextPage });
-      setQueue((prev) => [...prev, ...data.profiles]);
-      setHasMore(data.hasMore);
-      setPage(nextPage);
-    } catch (err) {
-      setError(err.message || 'Could not load discovery feed');
+  const loadPage = useCallback(
+    async (nextPage) => {
+      try {
+        const data = await api.getDiscoveryFeed({
+          page: nextPage,
+          ...(searchWider ? { maxDistanceKm: MAX_DISTANCE_KM_CAP } : {}),
+        });
+        setQueue((prev) => [...prev, ...data.profiles]);
+        setHasMore(data.hasMore);
+        setPage(nextPage);
+      } catch (err) {
+        setError(err.message || 'Could not load discovery feed');
+      }
+    },
+    [searchWider]
+  );
+
+  function handleSearchWider() {
+    setSearchWider(true);
+    setQueue([]);
+    setPage(0);
+    setHasMore(true);
+    setLoading(true);
+  }
+
+  // Re-fetch page 1 from scratch whenever "search wider" is turned on.
+  useEffect(() => {
+    if (!searchWider) return;
+    let cancelled = false;
+    async function reload() {
+      await loadPage(1);
+      if (!cancelled) setLoading(false);
     }
-  }, []);
+    reload();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchWider]);
 
   // Initial load.
   useEffect(() => {
@@ -270,11 +311,21 @@ function Discovery() {
           <div className="rounded-2xl border border-border bg-surface p-8 text-center">
             <p className="mb-2 text-lg font-semibold text-text-primary">You&rsquo;re all caught up</p>
             <p className="text-sm text-text-secondary">
-              No new profiles right now — check back later, or update your profile to widen your
-              reach.
+              No new profiles right now — check back later, search a wider distance, or update
+              your Discovery Preferences.
             </p>
+            {!searchWider && (
+              <Button variant="secondary" className="mt-4 w-full" onClick={handleSearchWider}>
+                Search wider ({MAX_DISTANCE_KM_CAP} km, this time only)
+              </Button>
+            )}
+            <Link to="/settings/discovery-preferences">
+              <Button variant="ghost" className="mt-2 w-full">
+                Discovery Preferences
+              </Button>
+            </Link>
             <Link to="/profile/edit">
-              <Button variant="secondary" className="mt-4 w-full">
+              <Button variant="secondary" className="mt-2 w-full">
                 Edit your profile
               </Button>
             </Link>

@@ -4,14 +4,77 @@ polish, security audit, documentation wrap-up) closed out the last of the 12 int
 tasks that made up the MVP build. Since then, post-MVP V2 features have been added by
 explicit user request: Instagram profile linking (self-reported handle, not OAuth),
 Why-You-Match + Smart Icebreakers (Task #15, deterministic heuristics, not real AI),
-a Referral program / "Invite & Earn" (Task #17), and Safe Date mode + Date Planner
-(Task #18 — see "Current Task" below and MOCK_FEATURES.md). Other V2 work
-(Boost/Priority Like, etc.) may be in progress concurrently on this branch — check
+a Referral program / "Invite & Earn" (Task #17), Safe Date mode + Date Planner
+(Task #18), and now Location/age match preferences + advanced discovery filters +
+Private browsing (Task #14 — see "Current Task" below and MOCK_FEATURES.md). Other V2
+work (Boost/Priority Like, etc.) may be in progress concurrently on this branch — check
 `git log` for the true current state rather than trusting this narrative alone.
 Phases 13/14/15 (Testing, full Security Hardening, Deployment) remain cross-cutting
 work not yet started — see "Remaining Features" below and docs/ROADMAP.md.
-Current Task: **V2 feature, user-requested: Task #18 — Safe Date mode + Date
-Planner**, added 2026-08-18. Two independent pieces (docs/ROADMAP.md's Phase 12):
+Current Task: **V2 feature, user-requested: Task #14 — Location/age match
+preferences + advanced discovery filters + Private browsing**, added 2026-08-18
+("location preference ... jaise other dating apps kaam karte hain"). Persisted
+`profiles.preferences` sub-document (`maxDistanceKm`, `minAge`/`maxAge` with a hard
+18-year floor re-enforced at three layers — schema `min`, route validation, and
+`getEffectivePreferences()`'s own floor — `datingIntentions`, `verifiedOnly`) plus
+`profiles.location` (GeoJSON Point, 2dsphere-indexed) / `profiles.locationSource`
+(`'device'` vs `'approximate_city'`) and `profiles.privacySettings.incognito`, all
+read/written through the existing `PUT /api/profile/me` partial-merge — no new
+profile endpoint. **THE CRITICAL FINDING of this task's audit:**
+`GET /api/discovery/feed` (`backend/routes/discovery.js`, originally built in Task
+#4) previously applied **NO gender filtering at all, in either direction** — every
+user of every gender was shown to every other user regardless of `interestedIn`. This
+is now fixed bidirectionally: a candidate is only shown if (a) the candidate's gender
+is something the caller wants to see AND (b) the caller's gender is something the
+candidate wants to see (an empty/unset `interestedIn`, or one containing `'everyone'`,
+is treated as permissive — no filter — matching this codebase's existing convention
+for unset optional preferences). Age-range matching is the same shape of bidirectional
+rule (candidate's age must fit the caller's `[minAge, maxAge]` preference AND the
+caller's age must fit the candidate's own stated preference), implemented as an
+indexable `dateOfBirth` range query for "my preference filters them" and a `$expr` +
+`$ifNull` comparison for "their preference filters me" (their preference varies per
+document, so it can't be a static range). Both rules are documented as pure,
+independently-unit-testable functions in the new
+`backend/utils/matchPreferenceUtils.js` (`isGenderMutuallyCompatible`,
+`isAgeMutuallyCompatible`, `getEffectivePreferences`, `dobRangeForAgeRange`) — the
+Mongo query in `discovery.js` implements the *same* rules directly for query
+efficiency, with inline comments cross-referencing exactly which rule from that file
+each query fragment corresponds to; Task #19's ranking layer should reuse these
+functions rather than re-deriving the eligibility rules a third time. Distance
+filtering (new `backend/utils/geoUtils.js` — `haversineDistanceKm`,
+`resolveApproxCoordinates`, `isWithinDistance`) runs in application code, not a native
+Mongo `$near`/`$geoWithin` query, and is **honestly limited**: this project has no
+geocoding API key configured anywhere (no Google Maps/Mapbox credentials, the same
+"unconfigured external integration" pattern already true of Cloudinary/Razorpay/FCM/
+SMS — see MOCK_FEATURES.md), so real device-geolocation capture (frontend's
+explicit-consent "Use my current location" button in `ProfileBuilder.jsx`, wired to
+`PUT /api/profile/me`'s `latitude`/`longitude`) is the primary path, and every profile
+that hasn't granted it falls back to a static, hand-maintained
+Chhattisgarh city/district → approximate town-center-coordinate lookup table
+(`backend/constants/cgLocationOptions.js`, ~35 entries). A city/district not in that
+table gets no coordinate at all, and `isWithinDistance()` is deliberately fail-open:
+missing coordinates on either side never exclude a profile, they just make distance
+unknown (`distanceKm: null` in the response) — see `MOCK_FEATURES.md`'s Task #14
+entry for the full "why not a real geo query yet" writeup. Also new: one-off,
+non-persisted query-param overrides (`?maxDistanceKm=`/`?minAge=`/`?maxAge=`/
+`?verifiedOnly=`, 400 on invalid values) for a "search wider" UX without touching
+saved preferences; `verifiedOnly` filtering (reuses Task #9's `photoVerification`
+status); and Private/Incognito browsing (`profiles.privacySettings.incognito` —
+`GET /api/discovery/feed` excludes any incognito user via `$ne: true`, with no other
+route changed — an incognito user still appears in existing matches/chats, only new
+discovery is affected). The legacy Task #4 `?datingIntention=`/`?city=` ad-hoc query
+params are preserved unchanged for backward compatibility. Frontend: new
+`frontend/src/pages/DiscoveryPreferences.jsx` (linked from Settings — sliders/selects
+for all five preference fields plus incognito toggle), `frontend/src/pages/
+ProfileBuilder.jsx` ("Use my current location" button, browser Geolocation API),
+`frontend/src/pages/Discovery.jsx` ("Search wider" button using the query-param
+override + per-card distance display when known), `frontend/src/constants/
+discoveryOptions.js` (new, mirrored enums/caps). See `docs/DATABASE_SCHEMA.md`'s
+`profiles.preferences`/`profiles.location` sections and
+`docs/API_DOCUMENTATION.md`'s Discovery section for the full contract, and this
+file's "Last Successful Test" entry below for the verification detail.
+Before this, Task #18 — Safe Date mode + Date Planner, added 2026-08-18. Two
+independent pieces (docs/ROADMAP.md's Phase 12):
 **Safe Date mode** — `SafeDate` model (`backend/models/SafeDate.js`: `user`, optional
 `match`, free-text `location` — an "approximate public location", explicitly **never**
 exact GPS coordinates or silently-tracked device location, per the product spec's
@@ -170,7 +233,13 @@ critical transitive `npm audit` finding in `node-tar` (`backend/`'s `npm audit` 
 reports 0 vulnerabilities); new `docs/SECURITY_AUDIT.md` documenting the full audit;
 BUG-001 (P1) filed for the larger, deliberately-not-attempted-here remaining gap
 (no rate limiting beyond auth, no `helmet`/security-headers middleware — real Phase 14
-scope). See docs/SECURITY_AUDIT.md for the complete audit writeup.
+scope). See docs/SECURITY_AUDIT.md for the complete audit writeup; **Location/age
+match preferences + advanced discovery filters + Private browsing (Task #14, this
+pass)** — see "Current Task" above for the full writeup; in one line: persisted
+`profiles.preferences`/`profiles.location`/`profiles.privacySettings.incognito`, a
+critical fix making Discovery's gender AND age matching genuinely bidirectional
+(previously zero gender filtering existed), and application-layer distance filtering
+against either real device coordinates or an approximate city-lookup fallback.
 Features In Progress: None — the MVP (Phases 0-10) is complete. Next work is either V2
 feature scope or the cross-cutting Phases 13-15 (Testing, full Security Hardening,
 Deployment) — see "Next Exact Task" below.
@@ -179,20 +248,23 @@ Profile Coach and a real-AI version of AI Date Ideas (V2, would need a real Clau
 integration — see MOCK_FEATURES.md; Why-You-Match and Smart Icebreakers are already
 implemented as deterministic heuristics, and Date Planner is already implemented as a
 curated heuristic suggestion generator — not the same as a future real-AI "AI Date
-Ideas" — see "Current Task" above), Private/Invisible browsing, advanced filters,
-Profile Boost, Priority Like, real Razorpay integration, voice/video calling (all V2 —
-Referral program and Safe Date mode/Date Planner are now implemented, see "Current
-Task" above); CG Connect/Events, advanced Trust Engine, ML
+Ideas" — see "Current Task" above), Profile Boost, Priority Like, real Razorpay
+integration, voice/video calling, real Instagram OAuth (all V2 — Referral program,
+Safe Date mode/Date Planner, and now Location/age preferences + advanced filters +
+Private browsing are all implemented, see "Current Task" above; a weighted
+ranking/recommendation algorithm on top of Task #14's eligibility filtering is Task
+#19, the next exact task — see below); CG Connect/Events, advanced Trust Engine, ML
 recommendations, advanced admin
 analytics, statewide/national expansion, city-scale SEO pages, Capacitor native wrapper
 (all V3). Also still deferred within already-shipped MVP features (unchanged from
-before this pass, see TODO.md for the full list): a persisted `preferences` collection
-(age range/distance filters), unmatch, "who liked you" reveal screen, image/voice chat
-messages, matches-list last-message preview/unread badge, real FCM push delivery, real
-SMS/OTP provider delivery, real Razorpay integration, report evidence file upload,
-automated spam/scam/abuse detection ("Trust Engine"), `GET /api/admin/audit-logs` (the
-model/index exist, nothing reads them back yet), permanent ban/account-deletion (suspend/
-reinstate only, reversible).
+before this pass, see TODO.md for the full list): unmatch, "who liked you" reveal
+screen, image/voice chat messages, matches-list last-message preview/unread badge,
+real FCM push delivery, real SMS/OTP provider delivery, real Razorpay integration,
+report evidence file upload, automated spam/scam/abuse detection ("Trust Engine"),
+`GET /api/admin/audit-logs` (the model/index exist, nothing reads them back yet),
+permanent ban/account-deletion (suspend/reinstate only, reversible). The persisted
+`preferences` sub-document itself (age range/distance/dating-intention/verified-only)
+is no longer on this list — implemented this pass, Task #14.
 Known Bugs: BUG-001 (P1) — no rate limiting beyond login/signup, no security-headers
 middleware; see BUGS.md and docs/SECURITY_AUDIT.md. No other bugs found in this pass's
 audit/consistency check.
@@ -205,12 +277,48 @@ Match's canonical-pair unique index, User.email's unique index) in this codebase
 "Before real production launch" in TODO.md. `users.phone` is still not unique-indexed.
 Cloudinary/Firebase/Razorpay/Claude API integrations remain unconfigured — see
 MOCK_FEATURES.md for the complete, consolidated list (photo storage, SMS/OTP delivery,
-FCM push, Razorpay checkout are all MOCK/TEMPORARY). Discovery has no geo/distance
-filtering yet. Chat is text-only. Report evidence is plain strings, no file upload. No
+FCM push, Razorpay checkout are all MOCK/TEMPORARY). Discovery now HAS real
+gender/age/distance/intention/verified-only filtering (Task #14, this pass), but
+distance filtering still relies on an approximate city-coordinate lookup rather than
+a real geocoding API (no Google Maps/Mapbox key configured — see MOCK_FEATURES.md's
+Task #14 entry) and runs in application code rather than a native Mongo geo query.
+Chat is text-only. Report evidence is plain strings, no file upload. No
 automated test suite exists in either backend/ or frontend/ (see
 docs/TESTING_STRATEGY.md). BUG-001 (rate limiting/security headers beyond auth) is
-newly tracked in this pass — see above.
-Last Successful Test (Task #18 — Safe Date mode + Date Planner, this pass): Backend —
+tracked from a prior pass — see above.
+Last Successful Test (Task #14 — Location/age match preferences + advanced discovery
+filters + Private browsing, this pass): Backend — `node -e "require('./server.js')"`
+boots cleanly with no import/syntax errors, listens on port 5000; `curl` with no
+`Authorization` header on `GET /api/discovery/feed` returned 401, and with a garbage/
+malformed bearer token also returned 401 (the standing sandbox limitation — no live
+MongoDB in any of these sandboxes — means the full authed feed flow itself still
+can't be exercised end-to-end; see "Known Technical Debt"). A standalone Node script
+(`backend/__verify_match_preferences.js`, run from inside `backend/` so
+`node_modules` resolved, deleted before commit per this project's established
+convention) loaded the REAL `backend/utils/matchPreferenceUtils.js` and
+`backend/utils/geoUtils.js` directly, no DB connection needed: confirmed
+`isGenderMutuallyCompatible()` is genuinely bidirectional (mutual interest → true;
+one side interested but not reciprocated → false; unset/empty/`'everyone'`
+`interestedIn` on either side treated as permissive, still requiring the *other*
+side's interest); confirmed `isAgeMutuallyCompatible()` rejects a candidate whenever
+either side's own stated age-range preference excludes the other's actual age (both
+directions tested independently); confirmed `getEffectivePreferences()` correctly
+layers query-param overrides on top of stored preferences and still enforces the
+18-year minAge floor even when an override tries to go below it; confirmed
+`dobRangeForAgeRange()`'s date-math bounds agree with `calculateAge()`-style whole-
+year age calculation at the range edges (in-range/too-young/too-old DOBs all landed
+correctly); confirmed `haversineDistanceKm()` returns sane, correctly-ordered
+distances for a known short city pair (Raipur–Durg, ~36km) vs. a known long pair
+(Raipur–Bilaspur, ~106km) vs. a genuinely far reference point (~932km); confirmed
+`resolveApproxCoordinates()` returns real `[lng, lat]` for a known Chhattisgarh city
+and `null` for an unlisted one; confirmed `isWithinDistance()` is fail-open (returns
+`withinDistance: true, distanceKm: null`, never excludes) when either side's
+coordinates are missing, while still correctly including/excluding when both
+coordinates are present. 23 checks, all passed. Frontend — `npm run build` clean (no
+errors, `dist/` produced); `npm run lint` (oxlint) — 0 errors, the same 2 pre-existing
+`only-export-components` warnings (`AuthContext.jsx`/`NotificationContext.jsx`,
+unrelated to this task) carried forward, no new warnings.
+Last Successful Test (Task #18 — Safe Date mode + Date Planner, prior pass): Backend —
 `node -e "require('./server.js')"` boots cleanly (mounted alongside Task #17's
 `referralsRouter`, already present on the shared `server.js` when this pass started),
 no import/syntax errors; `GET /api/health` 200; `curl` with no `Authorization` header
@@ -339,7 +447,25 @@ empty states confirmed present on Discovery, Matches, Chat, NotificationBell, an
 four Admin screens (all funnel through `frontend/src/api.js`'s single `request()`
 helper, which attaches `.status`/`.data` to thrown errors consistently) — no changes
 needed.
-Last Modified Files (Task #18 — Safe Date mode + Date Planner, this pass):
+Last Modified Files (Task #14 — Location/age match preferences + advanced discovery
+filters + Private browsing, this pass): backend/models/Profile.js (new `preferences`
+sub-document, `location`/`locationSource`, `privacySettings.incognito`),
+backend/routes/discovery.js (bidirectional gender + age matching fix, query-param
+overrides, incognito exclusion, distance filtering, `appliedPreferences`/`distanceKm`
+in the response), backend/routes/profile.js (extended `PUT /api/profile/me` for all
+new fields), backend/utils/matchPreferenceUtils.js (new),
+backend/utils/geoUtils.js (new), backend/constants/cgLocationOptions.js (new),
+backend/constants/discoveryOptions.js (new default/cap constants),
+backend/utils/profileSerializers.js (updated for new fields),
+frontend/src/App.jsx (new /discovery-preferences route),
+frontend/src/api.js (preference/location API calls), frontend/src/pages/
+DiscoveryPreferences.jsx (new), frontend/src/pages/ProfileBuilder.jsx ("Use my
+current location" button), frontend/src/pages/Discovery.jsx ("Search wider" button +
+distance display), frontend/src/pages/Settings.jsx (new link),
+frontend/src/constants/discoveryOptions.js (new), MOCK_FEATURES.md, TODO.md,
+docs/API_DOCUMENTATION.md, docs/DATABASE_SCHEMA.md, this file,
+IMPLEMENTATION_PROGRESS.md.
+Last Modified Files (Task #18 — Safe Date mode + Date Planner, prior pass):
 backend/constants/safeDateOptions.js (new), backend/constants/dateIdeaOptions.js
 (new), backend/models/SafeDate.js (new), backend/utils/safeDateUtils.js (new),
 backend/utils/datePlanUtils.js (new), backend/routes/safeDates.js (new),
@@ -400,29 +526,37 @@ package-lock.json (bcrypt 5.1.1 → 6.0.0, express-rate-limit added), docs/
 SECURITY_AUDIT.md (new), BUGS.md (BUG-001 added), PROJECT_STATE.md (this file),
 IMPLEMENTATION_PROGRESS.md, TODO.md, MOCK_FEATURES.md, README.md, docs/ROADMAP.md (all
 updated to reflect final MVP-complete state — see git log for the exact diff).
-Database Status: New `SafeDate` collection this pass (Task #18 —
+Database Status: `Profile` gained a `preferences` sub-document
+(`maxDistanceKm`/`minAge`/`maxAge`/`datingIntentions`/`verifiedOnly`), a `location`
+GeoJSON Point (2dsphere-indexed, reusing the index that already existed but was never
+populated) + `locationSource` enum, and `privacySettings.incognito` this pass (Task
+#14). `SafeDate` collection was added the prior pass (Task #18 —
 `backend/models/SafeDate.js`: `user`, optional `match`, free-text `location`,
 `plannedStartAt`/`plannedEndAt`, optional `trustedContactName`/`trustedContactPhone`,
 `status`, `checkedInAt`/`completedAt`/`cancelledAt`, `reminderNotifiedAt`); `User`
-gained `referralCode`/`referredBy` in the prior pass (Task #17); `Profile` gained
-`instagramHandle` before that. `date_plans` (the Date Planner's originally-drafted
-collection) was **not** implemented — the Date Planner shipped as a stateless
-suggestion endpoint instead, nothing persisted, see `docs/DATABASE_SCHEMA.md`'s
-divergence note. MongoDB/Mongoose schemas implemented for User, Profile, Like, Match,
-Message, Notification, Block, Report, Plan, Subscription, AuditLog, and now SafeDate;
-no live DB connection has ever been verified in any sandbox session across this
-entire project — this remains the top technical-debt item (see "Known Technical
-Debt" and TODO.md's "Before real production launch" section).
+gained `referralCode`/`referredBy` before that (Task #17); `Profile` also has
+`instagramHandle` from before that. `date_plans` (the Date Planner's
+originally-drafted collection) was **not** implemented — the Date Planner shipped as
+a stateless suggestion endpoint instead, nothing persisted, see
+`docs/DATABASE_SCHEMA.md`'s divergence note. MongoDB/Mongoose schemas implemented for
+User, Profile, Like, Match, Message, Notification, Block, Report, Plan, Subscription,
+AuditLog, and SafeDate; no live DB connection has ever been verified in any sandbox
+session across this entire project — this remains the top technical-debt item (see
+"Known Technical Debt" and TODO.md's "Before real production launch" section).
 Backend Status: Express + Socket.IO server (same HTTP server) running with auth +
 profile + discovery + matches + notifications + verification + reports + blocks +
-subscription + referrals + safe-dates + date-ideas + admin routes. This pass added
-`POST/GET /api/safe-dates`, `GET/PATCH /api/safe-dates/:id*`, and
-`GET /api/date-ideas`; every other route unchanged in behavior. Boots cleanly;
-`GET /api/health` confirmed live.
-Frontend Status: This pass added three new screens (`PlanSafeDate.jsx`,
-`SafeDates.jsx`, `DateIdeas.jsx`) plus two new Settings links and one new Chat header
-link — every other screen unchanged in behavior. `npm run build`/`npm run lint` both
-clean (0 errors, same 2 pre-existing warnings carried forward).
+subscription + referrals + safe-dates + date-ideas + admin routes. This pass
+(Task #14) rewrote `GET /api/discovery/feed`'s filtering logic in place (bidirectional
+gender + age matching, distance/verified-only/incognito filtering, query-param
+overrides — no new route added) and extended `PUT /api/profile/me` for the new
+preference/location/privacy fields; every other route unchanged in behavior. Boots
+cleanly; `GET /api/health` confirmed live.
+Frontend Status: This pass (Task #14) added one new screen
+(`DiscoveryPreferences.jsx`) plus a "Use my current location" control in
+`ProfileBuilder.jsx`, a "Search wider" control + distance display in `Discovery.jsx`,
+and one new Settings link — every other screen unchanged in behavior. `npm run
+build`/`npm run lint` both clean (0 errors, same 2 pre-existing warnings carried
+forward).
 Authentication Status: Implemented (signup/login/JWT/me endpoint), now with rate
 limiting on both signup and login and the password hash never selected by default —
 unchanged otherwise.
@@ -447,29 +581,37 @@ role change), AuditLog on every mutation, role-gated /admin frontend section (un
 this pass).
 Deployment Status: Not started (planned: Render/Railway + MongoDB Atlas +
 Vercel/Netlify + Cloudinary — Phase 15, cross-cutting, not yet started).
-Next Exact Task: **The MVP (Phases 0-10) is genuinely complete and buildable
-end-to-end, modulo the standing untested-live-database caveat.** This project is
-explicitly **not production-ready** as-is — see TODO.md's "Before real production
-launch" section for the concrete list (live MongoDB Atlas connection + testing, real
-Cloudinary/Firebase/Razorpay/SMS provider credentials, real `.env` production secrets,
-a seeded real `SUPER_ADMIN` account, an automated test suite per
-docs/TESTING_STRATEGY.md, a unique index on `User.phone`, HTTPS/hosting setup per
-docs/ARCHITECTURE.md's Phase 15, and closing BUG-001). Despite that standing caveat,
-the user has explicitly requested V2 feature work directly (Instagram linking, Task
-#15 — Why-You-Match + Smart Icebreakers, Task #17 — Referral program, and now Task
-#18 — Safe Date mode + Date Planner), so V2 work is actively happening on this branch
-by explicit request, ahead of the MVP-first sequencing principle's default
-recommendation below. Remaining V2 scope not yet done by this session: AI Profile
-Coach, a real-AI version of AI Date Ideas (both would need a real Claude API
-integration — see MOCK_FEATURES.md), Private/Invisible browsing, advanced filters,
-Profile Boost, Priority Like, real Razorpay integration, voice/video calling, real
-Instagram OAuth — see docs/ROADMAP.md's V2 section. **No TaskList tool was available
-in this session to check the live task graph before writing this** — whoever picks
-this up next should check `git log` and any TaskList tooling available to them for
-the authoritative current state rather than trusting this line alone. Absent a
-specific next user-requested V2 item, the "Before real production launch" gaps above
-remain the recommended default next focus, per this project's own MVP-first
-sequencing principle (docs/ROADMAP.md's "Notes on sequencing").
+Next Exact Task: **Task #19 — a weighted ranking/recommendation algorithm for the
+discovery feed**, per the orchestrating session's task graph (TaskList tool is the
+authority on numbering — check it directly if you have access; #19 is confirmed
+correct as of this pass). Task #14 (this pass) built the *eligibility* layer —
+who is even allowed to see whom, via hard bidirectional gender/age filters plus
+distance/dating-intention/verified-only/incognito filtering — but the feed still
+returns eligible candidates in plain query order (most-recently-active-ish, via
+whatever the underlying `find()`'s natural/index order is), not ranked by predicted
+mutual interest. Task #19 should build a scoring layer on top of Task #14's already-
+eligible candidate set: likely reusing `backend/utils/matchPreferenceUtils.js` (don't
+re-derive the eligibility rules a third time) plus Task #15's existing
+`backend/utils/compatibilityUtils.js#computeCompatibility()` score as one ranking
+signal, alongside others (distance closeness, profile completeness, recent activity,
+verified status) — see docs/ROADMAP.md's V2/V3 "ML recommendations" note for the
+long-term direction, though Task #19 itself is very unlikely to mean a real ML model
+in this project (no training data, no ML infra configured — same
+mocked/heuristic-not-real-AI pattern as Icebreakers/Why-You-Match/Date Planner).
+Also still not done, V2 scope not covered by Task #19: AI Profile Coach, a real-AI
+version of AI Date Ideas (both would need a real Claude API integration — see
+MOCK_FEATURES.md), Profile Boost, Priority Like, real Razorpay integration,
+voice/video calling, real Instagram OAuth — see docs/ROADMAP.md's V2 section. This
+project remains explicitly **not production-ready** as-is regardless of V2 progress —
+see TODO.md's "Before real production launch" section for the concrete MVP-hardening
+list (live MongoDB Atlas connection + testing, real Cloudinary/Firebase/Razorpay/SMS
+provider credentials, real `.env` production secrets, a seeded real `SUPER_ADMIN`
+account, an automated test suite per docs/TESTING_STRATEGY.md, a unique index on
+`User.phone`, HTTPS/hosting setup per docs/ARCHITECTURE.md's Phase 15, and closing
+BUG-001) — that work remains the recommended default focus whenever V2 feature
+requests aren't actively driving the branch, per this project's own MVP-first
+sequencing principle (docs/ROADMAP.md's "Notes on sequencing"), but Task #19 is the
+concretely-requested next step right now.
 Next Recommended Action: Get a real MongoDB connection (Atlas free tier is enough)
 verified in whatever environment picks this project up next — every DB-dependent
 behavior in this entire codebase (10 feature tasks' worth of indexes, `select: false`

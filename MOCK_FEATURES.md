@@ -30,14 +30,44 @@ resolved by this pass (this pass was audit/polish/docs, not new feature work —
       Cloudinary -> store the returned secure URL only) before this ships to real
       users; when that happens, also revisit `backend/server.js`'s bumped 10mb JSON
       body limit (added only to allow base64 payloads through this mock path).
-- [ ] **Discovery has no geo/distance filtering yet — not a mock, a scope gap.**
-      `GET /api/discovery/feed` (`backend/routes/discovery.js`, Task #4) only filters
-      by `datingIntention` and an exact-ish `city` match; `profiles.location` still
-      isn't populated by any UI (unchanged from the Task #3 note), so there's no
-      `maxDistanceKm`/"near me" filtering yet — see the divergence note in
-      `docs/API_DOCUMENTATION.md`'s Discovery section. The actual swipe/match logic
-      itself (Like/Match models, mutual-match detection, canonical-pair uniqueness)
-      is real, not mocked.
+- [ ] **`[UPDATED — Task #14, V2, user-requested — "location preference ... jaise
+      other dating apps kaam karte hain"]` Discovery now has real distance/age/
+      gender-preference filtering, but distance still relies on an approximate
+      city-coordinate lookup rather than a real geocoding API — this line stays
+      unchecked/"currently mocked" because that geocoding gap is still genuinely
+      unresolved, even though the filtering logic around it is now real.**
+      Previously,
+      `GET /api/discovery/feed` only filtered by `datingIntention` and an
+      exact-ish `city` match, with `profiles.location` populated by nothing.
+      Now: (1) real device-coordinate capture is available (frontend's
+      explicit-consent "Use my current location" button, `PUT /api/profile/me`'s
+      `latitude`/`longitude`), but (2) **this project has no geocoding API key
+      configured (no Google Maps/Mapbox credentials, same "unconfigured external
+      integration" pattern as every other mock in this file)**, so most profiles
+      will only ever get an *approximate* town-center coordinate from a small,
+      hand-maintained static lookup table
+      (`backend/constants/cgLocationOptions.js`, ~35 Chhattisgarh
+      districts/towns) rather than a real geocoded address — see
+      `backend/utils/geoUtils.js#resolveApproxCoordinates()`. A city/district not
+      in that table gets no coordinate at all; distance filtering treats that
+      gracefully (the profile is still shown, `distanceKm: null`) rather than
+      guessing or excluding it. Distance filtering itself also runs in
+      application code (haversine formula) rather than a native MongoDB
+      `$near`/`$geoWithin` query — see `docs/API_DOCUMENTATION.md`'s Discovery
+      section for the full "why" writeup. **What IS real and non-mocked:**
+      bidirectional gender matching (a genuine correctness bug fixed by this
+      task — see PROJECT_STATE.md's Task #14 audit finding, this feed previously
+      applied NO gender filtering at all), bidirectional age-preference matching,
+      dating-intention preference filtering, `verifiedOnly` filtering, and
+      Private/Incognito browsing (`profiles.privacySettings.incognito`) — none of
+      those need any external API and are fully real. **Wiring a real geocoding
+      integration** (Google Maps Geocoding API / Mapbox) **would mean:** adding
+      an API key, replacing/supplementing `resolveApproxCoordinates()`'s static
+      lookup with a real API call at profile-save time (falling back to the
+      static table if the API call fails or the key isn't configured, so this
+      never becomes a hard dependency), and optionally moving distance filtering
+      into a native Mongo `$geoNear`/`$geoWithin` aggregation stage for
+      efficiency at scale — none of which exists yet.
 - [ ] **Firebase Cloud Messaging (push notifications) — no credentials configured,
       MOCK/TEMPORARY-deferred.** Task #6 (Notifications, see `docs/ROADMAP.md`
       Phase 6) implemented real, non-mocked **in-app** notifications end-to-end:

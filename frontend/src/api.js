@@ -95,13 +95,57 @@ export function addProfilePhoto({ url, imageBase64, mimeType }) {
   });
 }
 
-// --- Discovery + Matching (Task #4) ---------------------------------------
+// --- Discovery + Matching (Task #4; location/age preferences + query-param
+// overrides added in Task #14, V2, user-requested) --------------------------
 
-export function getDiscoveryFeed({ page, limit, datingIntention, city } = {}) {
-  return request(`/api/discovery/feed${toQueryString({ page, limit, datingIntention, city })}`, {
-    method: 'GET',
-    auth: true,
-  });
+// `maxDistanceKm`/`minAge`/`maxAge`/`verifiedOnly` are one-off overrides for
+// THIS request only (never persisted) — "search wider" UX, see
+// frontend/src/pages/Discovery.jsx. Omit them to use the caller's saved
+// preferences from `PUT /api/profile/me`'s `preferences` sub-object (see
+// updateMatchPreferences() below).
+export function getDiscoveryFeed({
+  page,
+  limit,
+  datingIntention,
+  city,
+  maxDistanceKm,
+  minAge,
+  maxAge,
+  verifiedOnly,
+} = {}) {
+  return request(
+    `/api/discovery/feed${toQueryString({
+      page,
+      limit,
+      datingIntention,
+      city,
+      maxDistanceKm,
+      minAge,
+      maxAge,
+      verifiedOnly,
+    })}`,
+    { method: 'GET', auth: true }
+  );
+}
+
+// Persisted match preferences (Task #14) — a thin, documented wrapper over
+// the existing partial-merge PUT /api/profile/me (no new endpoint; see
+// docs/API_DOCUMENTATION.md's Discovery section). Pass only the fields being
+// changed, e.g. updateMatchPreferences({ maxDistanceKm: 25 }).
+export function updateMatchPreferences(preferences) {
+  return request('/api/profile/me', { method: 'PUT', body: { preferences }, auth: true });
+}
+
+// Private/Incognito browsing (Task #14) — same partial-merge pattern.
+export function updatePrivacySettings(privacySettings) {
+  return request('/api/profile/me', { method: 'PUT', body: { privacySettings }, auth: true });
+}
+
+// Real device-coordinate capture (Task #14) — explicit user consent via the
+// browser geolocation API (frontend/src/pages/ProfileBuilder.jsx's "Use my
+// current location" button). Same partial-merge PUT /api/profile/me.
+export function updateProfileLocation(latitude, longitude) {
+  return request('/api/profile/me', { method: 'PUT', body: { latitude, longitude }, auth: true });
 }
 
 export function swipe(toUserId, action) {

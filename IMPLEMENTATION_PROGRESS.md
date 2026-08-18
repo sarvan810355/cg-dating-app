@@ -10,6 +10,82 @@ next task that follows from it.
 
 ---
 
+## 2026-08-18 — Location/age match preferences + advanced discovery filters + Private browsing (Task #14, V2, user-requested)
+
+- **Phase:** Phase 12 — Growth & Engagement Features (`docs/ROADMAP.md`). V2 feature
+  requested directly by the user in Hindi/Hinglish: "location preference ... jaise
+  other dating apps kaam karte hain" (suggestions should be filtered by users' stated
+  location/age preferences, like other dating apps). This task went through two
+  crashed attempts (a session limit before any code was written — no impact — and a
+  transient mid-response server error after the implementation was already done and
+  most docs updated) before a third attempt finished the implementation, and this
+  entry's own finishing pass (after a further two transient server-error crashes on
+  the finishing step alone) completed verification, `PROJECT_STATE.md`, and this log
+  entry, then committed. No functional work was lost across any of the interruptions
+  — this is the project's own credit/session-interruption protocol working exactly as
+  designed.
+- **THE CRITICAL FINDING:** `GET /api/discovery/feed` (`backend/routes/discovery.js`,
+  originally built in Task #4) previously applied **no gender filtering at all, in
+  either direction** — every user was shown to every other user regardless of
+  `interestedIn`. Fixed to be genuinely bidirectional: a candidate is shown only if
+  (a) the candidate's gender is something the caller wants to see, AND (b) the
+  caller's gender is something the candidate wants to see (an empty/unset
+  `interestedIn`, or one containing `'everyone'`, is treated as permissive). Age
+  matching got the same bidirectional treatment: candidate's age must fit the
+  caller's `[minAge, maxAge]` preference AND the caller's age must fit the
+  candidate's own stated preference.
+- **New:** `backend/utils/matchPreferenceUtils.js` (pure, DB-independent —
+  `isGenderMutuallyCompatible`, `isAgeMutuallyCompatible`, `getEffectivePreferences`,
+  `isDatingIntentionAcceptable`, `dobRangeForAgeRange`), `backend/utils/geoUtils.js`
+  (`haversineDistanceKm`, `resolveApproxCoordinates`, `isWithinDistance` — fail-open
+  on missing coordinates, never excludes for a data gap), `backend/constants/
+  cgLocationOptions.js` (static Chhattisgarh city/district → approximate
+  town-center-coordinate lookup table, ~35 entries — no geocoding API key is
+  configured for this project, same established "unconfigured external integration"
+  pattern as Cloudinary/Razorpay/FCM/SMS). `backend/models/Profile.js` gained a
+  persisted `preferences` sub-document (`maxDistanceKm`, `minAge`/`maxAge` with an
+  18-year floor enforced at three layers, `datingIntentions`, `verifiedOnly`), a now
+  actually-populated `location` (GeoJSON, 2dsphere-indexed) + `locationSource`
+  (`'device'` vs `'approximate_city'`), and `privacySettings.incognito` — all
+  read/written through the existing `PUT /api/profile/me` partial-merge, no new
+  profile endpoint. `GET /api/discovery/feed` gained one-off, non-persisted
+  query-param overrides (`?maxDistanceKm=`/`?minAge=`/`?maxAge=`/`?verifiedOnly=`,
+  400 on invalid values) for a "search wider" UX, `verifiedOnly` filtering (reuses
+  Task #9's `photoVerification` status), and incognito exclusion. The legacy Task #4
+  `?datingIntention=`/`?city=` query params are preserved unchanged.
+- **Frontend:** new `frontend/src/pages/DiscoveryPreferences.jsx` (linked from
+  Settings — controls for all five preference fields plus incognito toggle), a "Use
+  my current location" control in `ProfileBuilder.jsx` (browser Geolocation API,
+  explicit consent, manual city entry always available as a fallback), a "Search
+  wider" control + per-card distance display in `Discovery.jsx`.
+- **Verification performed** (this finishing pass, after re-confirming the
+  already-uncommitted code from the prior attempt): backend boots cleanly
+  (`node -e "require('./server.js')"` → listening on port 5000, no errors); frontend
+  `npm run build` and `npm run lint` both clean (0 errors, same 2 pre-existing
+  unrelated warnings, no new ones). A standalone script (deleted before commit)
+  loading the real `matchPreferenceUtils.js`/`geoUtils.js` directly confirmed: mutual
+  gender match → true, one-sided gender interest → false, permissive/unset
+  `interestedIn` → true; mutual age compatibility → true, and (after fixing a flawed
+  first test case that mislabeled its own expected outcome) a genuine one-sided age
+  exclusion — viewer's age outside the candidate's stated preferred range — correctly
+  → false; `dobRangeForAgeRange()` produces a valid `minDob < maxDob` range; known
+  Chhattisgarh cities resolve to approximate coordinates, an unknown city name
+  resolves to `null`; a known city pair's haversine distance is plausible; missing
+  coordinates fail open (candidate stays included, `distanceKm: null`).
+- **Docs updated:** `docs/DATABASE_SCHEMA.md`, `docs/API_DOCUMENTATION.md`,
+  `MOCK_FEATURES.md`, `TODO.md` (by the implementing attempt), `PROJECT_STATE.md`
+  (this finishing pass — full rewrite of "Current Task"/status fields/"Next Exact
+  Task", which now points to Task #19).
+- **Next task:** Task #19 — a weighted ranking/recommendation algorithm for the
+  discovery feed. Task #14 built the *eligibility* layer (who's even allowed to see
+  whom); the feed still returns eligible candidates in plain query order, not ranked
+  by predicted mutual interest. Task #19 should build a scoring layer on top,
+  reusing `matchPreferenceUtils.js` for eligibility and Task #15's
+  `compatibilityUtils.js#computeCompatibility()` as a ranking signal alongside
+  distance/profile-completeness/verification/recent-activity.
+
+---
+
 ## 2026-08-18 — Safe Date mode + Date Planner (Task #18, V2, user-requested)
 
 - **Phase:** Phase 12 — Growth & Engagement Features (`docs/ROADMAP.md`). V2 feature

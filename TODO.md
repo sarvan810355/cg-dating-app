@@ -106,6 +106,33 @@ tracked below.
       `frontend/src/pages/Signup.jsx` (prefillable via a `?ref=<CODE>` query param).
       **No real deep-link infrastructure** — the "shareable link" is just a copyable
       code + templated text, see `MOCK_FEATURES.md`'s entry.
+- [x] **Location/age match preferences + bidirectional matching fix + Private/
+      Incognito browsing (Task #14)** (2026-08-18, V2, user-requested — "location
+      preference ... jaise other dating apps kaam karte hain") — persisted
+      `profiles.preferences` (`maxDistanceKm`, `minAge`/`maxAge` with a hard `18`
+      floor, `datingIntentions`, `verifiedOnly`) and `profiles.privacySettings.
+      incognito`, both read/written via the existing `PUT /api/profile/me`
+      partial-merge (no new endpoint). **CRITICAL audit finding, fixed by this
+      task:** `GET /api/discovery/feed` previously applied **no gender filtering
+      at all**, in either direction — now bidirectionally enforced (candidate
+      must want the caller's gender AND vice versa), matching this task spec's
+      "jaise other dating apps kaam karte hain" ask. Age-range matching is also
+      bidirectional (candidate's age fits the caller's range AND the caller's age
+      fits the candidate's stated range). Real distance filtering uses
+      `profiles.location`, populated either from real device coordinates
+      (explicit-consent browser geolocation) or a static Chhattisgarh
+      city/district → approximate-coordinate lookup table (no geocoding API key
+      configured — see `MOCK_FEATURES.md`); missing coordinates on either side
+      gracefully skip distance filtering rather than excluding/crashing. One-off,
+      non-persisted query-param overrides
+      (`?maxDistanceKm=`/`?minAge=`/`?maxAge=`/`?verifiedOnly=`) support a "search
+      wider" UX. Frontend: `frontend/src/pages/DiscoveryPreferences.jsx` (new,
+      linked from Settings), `frontend/src/pages/ProfileBuilder.jsx` (new "Use my
+      current location" button), `frontend/src/pages/Discovery.jsx` (a "Search
+      wider" button + per-card distance display). See
+      `docs/DATABASE_SCHEMA.md`'s `profiles.preferences` section and
+      `docs/API_DOCUMENTATION.md`'s Discovery section for the full contract —
+      this is foundational for the next task, Task #19's ranking algorithm.
 - [x] **Safe Date mode + Date Planner (Task #18)** (2026-08-18) — `SafeDate` model
       (`backend/models/SafeDate.js`) + owner-only CRUD (`POST /api/safe-dates`,
       `GET /api/safe-dates`(`/:id`), `PATCH .../check-in`|`/complete`|`/cancel`) with a
@@ -154,11 +181,12 @@ unchecked line means the whole feature is unbuilt).
 - [x] Photo upload — MOCK/TEMPORARY (URL or base64 stored directly on the profile
       doc; real Cloudinary integration still not wired up, see MOCK_FEATURES.md)
 - [x] Bio + interests + prompts editing
-- [ ] Preferences (age range, distance, gender preference, dating intention filter) —
-      **still not a persisted collection** after Task #4; Discovery instead accepts
-      `datingIntention`/`city` as ad-hoc query params (see docs/DATABASE_SCHEMA.md's
-      `preferences` divergence note); `interestedIn`/`datingIntention` already live
-      on the Profile itself
+- [x] Preferences (age range, distance, gender preference, dating intention filter) —
+      **implemented 2026-08-18 (Task #14, V2, user-requested)** as `profiles.preferences`
+      (a sub-document, not a separate collection — see docs/DATABASE_SCHEMA.md's
+      `preferences` section), read/written via the existing `PUT /api/profile/me`;
+      gender preference is still `profiles.interestedIn` itself, now actually
+      enforced bidirectionally by Discovery (see below)
 - [x] Profile strength / completeness score (`profileCompletionPercentage` +
       `completionHints`, computed server-side)
 - [x] Profile view (own via `GET /api/profile/me`, others' public view via
@@ -167,16 +195,25 @@ unchecked line means the whole feature is unbuilt).
 ### Location
 - [x] City/district capture (not exact address) — district is free text, supports
       any CG district/town, not just major cities
-- [ ] Location-based query support (2dsphere index) — index exists on
-      `profiles.location`, but no UI/route populates or queries it yet; deferred to
-      Task #4 (Discovery)
+- [x] Location-based query support (2dsphere index) — **implemented 2026-08-18
+      (Task #14, V2, user-requested)**: real device-coordinate capture (frontend's
+      "Use my current location" button) plus a city/district → approximate-coordinate
+      fallback (`backend/constants/cgLocationOptions.js` — no geocoding API key
+      configured, see `MOCK_FEATURES.md`) now populate `profiles.location`, and
+      `GET /api/discovery/feed` applies real distance filtering against it
+      (application-layer haversine, not a native Mongo geo query — see
+      `docs/API_DOCUMENTATION.md`'s Discovery section for why)
 
 ### Discovery
 - [x] Discovery feed API with pagination (`GET /api/discovery/feed`, page-based)
 - [x] Discovery feed UI (`frontend/src/pages/Discovery.jsx` — card + Like/Pass
       buttons, loads more as the queue runs low)
-- [x] Basic filters (`datingIntention`, `city`) — age range / distance filters
-      deferred, see the `preferences` item above and `docs/API_DOCUMENTATION.md`
+- [x] Basic filters (`datingIntention`, `city`) — **age range / distance filters
+      implemented 2026-08-18 (Task #14, V2, user-requested)**, see the `preferences`
+      item above and `docs/API_DOCUMENTATION.md`. **CRITICAL fix included in the
+      same task:** the feed previously applied NO gender filtering at all in either
+      direction — now bidirectionally enforced (candidate wants my gender AND I want
+      theirs), see PROJECT_STATE.md's Task #14 audit finding.
 
 ### Like / Pass / Match
 - [x] Like/Pass API (`POST /api/discovery/swipe`)
@@ -332,8 +369,14 @@ unchecked line means the whole feature is unbuilt).
 - [x] Date Planner — **implemented 2026-08-18 (Task #18) as a curated heuristic
       suggestion generator, NOT via the real Claude API** (see the "AI Date Ideas"
       note above and the "Post-MVP feature additions" entry above).
-- [ ] Private / Invisible browsing
-- [ ] Advanced filters
+- [x] Private / Invisible browsing — **implemented 2026-08-18 (Task #14)** as
+      `profiles.privacySettings.incognito` — see the "Post-MVP feature additions"
+      entry above.
+- [x] Advanced filters — **implemented 2026-08-18 (Task #14)**: distance,
+      age range, dating-intention list, and verified-only, all persisted and
+      bidirectionally enforced where applicable (gender/age) — see the
+      "Post-MVP feature additions" entry above. Boost/Priority-Like-style
+      "advanced" ranking (not just filtering) remains Task #19 scope.
 - [ ] Profile Boost
 - [ ] Priority Like
 - [x] Referral program (Invite & Earn) — **implemented 2026-08-18 (Task #17)** — see

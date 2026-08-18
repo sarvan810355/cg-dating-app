@@ -123,6 +123,14 @@ function ProfileBuilder() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [promptChoice, setPromptChoice] = useState(PERSONALITY_PROMPTS[0]);
   const [promptAnswer, setPromptAnswer] = useState('');
+  // Task #14 — real coordinate capture (V2, user-requested: location
+  // preference filtering). Explicit-consent only: this is set purely by the
+  // "Use my current location" button below, never automatically. `null`
+  // means unknown; the API also returns this after every save so it stays
+  // accurate if the backend fell back to a city/district approximation
+  // instead (see backend/utils/geoUtils.js).
+  const [locationInfo, setLocationInfo] = useState(null); // { source, lat, lng } | null
+  const [locationBusy, setLocationBusy] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -155,6 +163,7 @@ function ProfileBuilder() {
         setPhotos(p.photos || []);
         setCompletion(p.profileCompletionPercentage || 0);
         setHints(p.completionHints || []);
+        setLocationInfo(p.location ? { source: p.locationSource, ...p.location } : null);
       } catch (err) {
         // No profile yet (404) is the expected "first-time builder" case.
         if (!cancelled && !/not found/i.test(err.message || '')) {
@@ -240,6 +249,12 @@ function ProfileBuilder() {
       setHints(data.profile.completionHints || []);
       setPhotos(data.profile.photos || []);
       update('instagramHandle', data.profile.instagramHandle || '');
+      // City/district changes may have triggered the backend's approximate-
+      // location fallback (backend/utils/geoUtils.js) — refresh so the
+      // location status message below stays accurate.
+      setLocationInfo(
+        data.profile.location ? { source: data.profile.locationSource, ...data.profile.location } : null
+      );
       setSuccess('Profile saved');
     } catch (err) {
       setError(err.message || 'Could not save your profile');
@@ -263,6 +278,50 @@ function ProfileBuilder() {
     } finally {
       setPhotoBusy(false);
     }
+  }
+
+  // Task #14 — "Use my current location" (real device coordinate capture,
+  // V2, user-requested). Deliberately opt-in and explicit: nothing on this
+  // page ever calls the geolocation API on its own; this only runs when the
+  // user clicks the button, and the browser's own native permission prompt
+  // is the actual consent gate. Manual city/district entry above always
+  // remains available regardless of whether this succeeds, is denied, or is
+  // never used at all — see backend/utils/geoUtils.js's city-approximation
+  // fallback for what happens when it isn't.
+  function handleUseCurrentLocation() {
+    setError('');
+    if (!navigator.geolocation) {
+      setError('Location access is not available in this browser — your city/district below is used instead.');
+      return;
+    }
+    setLocationBusy(true);
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        try {
+          const { latitude, longitude } = position.coords;
+          const data = await api.updateProfileLocation(latitude, longitude);
+          setLocationInfo(
+            data.profile.location
+              ? { source: data.profile.locationSource, ...data.profile.location }
+              : null
+          );
+          setSuccess('Location updated');
+        } catch (err) {
+          setError(err.message || 'Could not save your location');
+        } finally {
+          setLocationBusy(false);
+        }
+      },
+      (geoErr) => {
+        setLocationBusy(false);
+        setError(
+          geoErr.code === geoErr.PERMISSION_DENIED
+            ? 'Location permission denied — your city/district below will be used as an approximate location instead.'
+            : 'Could not determine your location — try again, or rely on your city/district below.'
+        );
+      },
+      { enableHighAccuracy: false, timeout: 10000 }
+    );
   }
 
   function handleFileSelected(e) {
@@ -457,6 +516,31 @@ function ProfileBuilder() {
                 placeholder="Type any Chhattisgarh district or town"
                 helperText="Not limited to major cities — any CG district/town works"
               />
+            </div>
+
+            {/* Task #14 — real coordinate capture (V2, user-requested).
+                Optional and explicit-consent only: used for distance-based
+                match preferences (Settings > Discovery Preferences). If you
+                never click this, your city/district above is used to
+                estimate an approximate location instead — see
+                MOCK_FEATURES.md (no geocoding API is configured). */}
+            <div className="mt-4 border-t border-border pt-4">
+              <p className="mb-2 text-xs text-text-secondary">
+                {locationInfo?.source === 'device' &&
+                  '📍 Using your device’s current location for distance-based matches.'}
+                {locationInfo?.source === 'approximate_city' &&
+                  '📍 Using an approximate location from your city/district above. Share your device location for more accurate distance matching.'}
+                {!locationInfo &&
+                  'Add your city/district above for an approximate location, or share your exact device location below for more accurate distance-based matches.'}
+              </p>
+              <Button
+                type="button"
+                variant="secondary"
+                loading={locationBusy}
+                onClick={handleUseCurrentLocation}
+              >
+                📍 Use my current location
+              </Button>
             </div>
           </section>
 

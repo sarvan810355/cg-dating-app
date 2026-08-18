@@ -113,9 +113,24 @@ Public-facing dating profile, 1:1 with `users`. Implemented in
 - `city`, `district` (free text — supports any Chhattisgarh district/town, not a
   closed list; see `backend/constants/profileOptions.js` for the *suggested*,
   non-exhaustive `CG_DISTRICTS` list used only as UI autocomplete), `state`
-  (default `Chhattisgarh`), `location` (GeoJSON `Point`, optional, not yet
-  populated by any UI — reserved for Task #4 discovery) — city/district only,
-  never exact address
+  (default `Chhattisgarh`), `location` (GeoJSON `Point`, optional) — city/district
+  only, never exact address. **`[NOW POPULATED, Task #14, V2, user-requested]`** —
+  reserved-but-unused since Task #4, now actually set by one of two paths: (1) real
+  device coordinates via `PUT /api/profile/me`'s `latitude`/`longitude` fields,
+  captured by the frontend's explicit-consent "Use my current location" button
+  (browser Geolocation API — never silent/automatic); or (2) an approximate
+  town-center coordinate looked up from `city`/`district` via the static
+  `backend/constants/cgLocationOptions.js` table whenever city/district changes
+  and no real device coordinate is already set — this project has no geocoding API
+  key configured (see `MOCK_FEATURES.md`), so this static table is the honest
+  fallback rather than leaving `location` empty for most profiles. See
+  `backend/utils/geoUtils.js`.
+- `locationSource` — `[NEW, Task #14]` enum `'device' | 'approximate_city' | null`
+  (default `null`). Provenance of `location` above, so the API/frontend can be
+  honest about precision instead of presenting a city-center guess as if it were
+  the user's real position. A `'device'` value is never silently downgraded back to
+  `'approximate_city'` by a later, unrelated city/district edit — see
+  `backend/routes/profile.js`'s `PUT /me` handler.
 - `profession`, `education`
 - `interests` (array of free strings, max 15).
   **Divergence:** implemented as free strings directly on the profile rather than
@@ -168,9 +183,42 @@ Public-facing dating profile, 1:1 with `users`. Implemented in
   now includes a `photoVerified` boolean (and `mobileVerified`) derived from
   `users.photoVerification`/`users.mobileVerification`, which serves the
   same purpose this field was reserved for.
+- `preferences` — `[NEW, Task #14, V2, user-requested — "location preference ...
+  jaise other dating apps kaam karte hain"]`. Persistent, 1:1-with-profile
+  discovery/matching preferences — the collection this codebase's `preferences`
+  section below (`[PLANNED]` since Task #4) described as still-deferred; now
+  implemented directly as a sub-document on `profiles` rather than a separate
+  collection (same "1:1-with-owner, always-fetched-together settings" reasoning
+  already applied to `notificationPreferences`/`mobileVerification` on `users`).
+  Read/written via the existing `PUT /api/profile/me` partial-merge body — no new
+  endpoint. See `backend/utils/matchPreferenceUtils.js` for the exact matching
+  rules this feeds and `docs/API_DOCUMENTATION.md`'s Discovery section for the
+  full contract.
+  - `maxDistanceKm` (Number, default `50`, `1`-`500`).
+  - `minAge` (Number, default `18`, `18`-`100`). **Hard safety floor: can never go
+    below `18`**, enforced at both the route layer (`backend/routes/profile.js`)
+    and the schema layer (`backend/models/Profile.js`'s `min: MIN_AGE` validator
+    plus a `pre('validate')` hook that also blocks `maxAge < minAge`) — the same
+    `MIN_AGE` constant this codebase already enforces on the user's OWN age
+    (`dateOfBirth`), applied here to the age the user is willing to see OTHERS at.
+  - `maxAge` (Number, default `45`, `18`-`100`, must be `>= minAge`).
+  - `datingIntentions` (array of the `datingIntention` enum, default `[]`) — empty/
+    absent means "any" (no filter).
+  - `verifiedOnly` (Boolean, default `false`) — only show candidates with
+    `photoVerification.status === 'VERIFIED'` (Task #9). A visibility filter on
+    what the caller wants to SEE — distinct from `privacySettings.incognito` below.
+- `privacySettings` — `[NEW, Task #14]`. Also covers Private/Incognito browsing, a
+  separate long-standing V2 TODO item, implemented alongside this task.
+  - `incognito` (Boolean, default `false`) — when `true`, this profile is excluded
+    from every OTHER user's `GET /api/discovery/feed` entirely; the owner can
+    still browse others normally. A one-way "don't show me" toggle, not a mutual
+    block — distinct from `blocks` below.
 - `createdAt`, `updatedAt`
-- Indexes: unique on `user`; `2dsphere` on `location`; compound index on
-  `(datingIntention, district)` for discovery filtering.
+- Indexes: unique on `user`; `2dsphere` on `location` (reserved for a future real
+  geospatial query — see the `preferences` section below's implementation note on
+  why Task #14's actual distance filtering is application-layer, not a native Mongo
+  geo query); compound index on `(datingIntention, district)` for discovery
+  filtering.
 
 ### `photos` — **not implemented as a separate collection**
 See the `profiles.photos` divergence note above — photos are embedded on the
@@ -188,18 +236,35 @@ is introduced later (e.g. for interest-based discovery filtering/autocomplete).
 - `_id`, `name` (unique), `category`, `isActive`
 - Indexes: unique on `name`.
 
-### `preferences` — `[PLANNED]`, still deferred past Task #4 (Discovery)
-Discovery/matching preferences, 1:1 with `users`. **Still not implemented as a
-persisted collection.** Task #4 (Discovery) shipped basic ad-hoc filtering
-instead — `GET /api/discovery/feed?datingIntention=&city=` accepts these as
-per-request query params rather than a saved, editable preferences record. Age
-range, distance/geo-radius (`profiles.location` is still not populated by any
-UI — see the `profiles` section above), and a persisted `showMeOnDiscovery`
-toggle are all still not built; a dedicated `preferences` collection (or fields
-folded onto `profiles`) remains future scope if/when saved filters are needed.
-- `_id`, `userId` (ref `users`, unique), `ageMin`, `ageMax`, `genderPreference`,
-  `distanceKm`, `datingIntentionFilter`, `showMeOnDiscovery` (bool)
-- Indexes: unique on `userId`.
+### `preferences` — `[IMPLEMENTED, Task #14, V2, user-requested — folded onto `profiles`, not a separate collection]`
+Discovery/matching preferences, 1:1 with `profiles`/`users`. **Divergence from the
+original draft:** implemented as the `profiles.preferences` sub-document (see the
+`profiles` section above) rather than a separate collection — same "1:1-with-owner,
+always-fetched-together settings" reasoning already used for
+`notificationPreferences`/`mobileVerification` on `users`. Age range
+(`minAge`/`maxAge`, with an always-enforced `minAge >= 18` safety floor),
+distance (`maxDistanceKm`, now meaningful — `profiles.location` is now actually
+populated, see the `profiles` section's Task #14 subsection above),
+`datingIntentions` (the draft's `datingIntentionFilter`, pluralized to a list), and
+`verifiedOnly` are all implemented. `genderPreference` is **not** a separate
+preferences field — it's still `profiles.interestedIn` itself (unchanged since
+Task #3), now actually enforced bidirectionally by the discovery feed (see
+`docs/API_DOCUMENTATION.md`'s Discovery section's CRITICAL audit-fix note).
+`showMeOnDiscovery` is implemented as `profiles.privacySettings.incognito`
+(inverted sense — `incognito: true` means "don't show me", matching how the
+feature is described in `docs/ROADMAP.md`'s V2 list, "Private/Invisible
+browsing") rather than a separate collection field.
+- `profiles.preferences.maxDistanceKm`, `.minAge`, `.maxAge`, `.datingIntentions`,
+  `.verifiedOnly` — see the `profiles` section above for the full field list.
+- `profiles.privacySettings.incognito` — see the `profiles` section above.
+- Read/written via `GET`/`PUT /api/profile/me` (no dedicated `/api/preferences`
+  endpoint — extends the existing partial-merge pattern instead, since the fields
+  fit naturally alongside every other profile setting already updated that way).
+- One-off, non-persisted overrides of `maxDistanceKm`/`minAge`/`maxAge`/
+  `verifiedOnly` are also accepted as query params directly on
+  `GET /api/discovery/feed` (`?maxDistanceKm=`/`?minAge=`/`?maxAge=`/
+  `?verifiedOnly=`) for "search wider" UX — see
+  `docs/API_DOCUMENTATION.md`'s Discovery section.
 
 ### `prompts` — **not implemented as a separate collection**
 See the `profiles.personalityPrompts` divergence note above — the prompt bank is

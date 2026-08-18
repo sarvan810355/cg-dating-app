@@ -28,6 +28,28 @@ function toOwnProfileJSON(profile) {
     lifestyle: obj.lifestyle,
     personalityPrompts: obj.personalityPrompts,
     instagramHandle: obj.instagramHandle || null,
+    // Task #14 — location/age match preferences (V2, user-requested). Own
+    // coordinates are safe to return to their own owner (never to anyone
+    // else — toPublicProfileJSON below never includes `location`, matching
+    // this codebase's existing "city/district only, never exact
+    // coordinates" rule). `location` is surfaced as a plain {lat, lng} pair
+    // (not raw GeoJSON) since that's what the frontend's map-free "location
+    // set" status UI actually needs.
+    location:
+      obj.location && Array.isArray(obj.location.coordinates) && obj.location.coordinates.length === 2
+        ? { lat: obj.location.coordinates[1], lng: obj.location.coordinates[0] }
+        : null,
+    locationSource: obj.locationSource || null,
+    preferences: {
+      maxDistanceKm: obj.preferences?.maxDistanceKm,
+      minAge: obj.preferences?.minAge,
+      maxAge: obj.preferences?.maxAge,
+      datingIntentions: obj.preferences?.datingIntentions || [],
+      verifiedOnly: !!obj.preferences?.verifiedOnly,
+    },
+    privacySettings: {
+      incognito: !!obj.privacySettings?.incognito,
+    },
     photos: obj.photos.map((p) => ({ id: p._id, url: p.url, isPrimary: p.isPrimary })),
     profileCompletionPercentage: obj.profileCompletionPercentage,
     completionHints: getCompletionHints(obj),

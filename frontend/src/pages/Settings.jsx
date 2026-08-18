@@ -253,6 +253,14 @@ function Settings() {
           </Button>
         </Link>
 
+        {/* Task #14 — location/age match preferences + incognito browsing
+            (V2, user-requested). */}
+        <Link to="/settings/discovery-preferences">
+          <Button variant="ghost" className="mt-2 w-full">
+            Discovery Preferences
+          </Button>
+        </Link>
+
         {/* Task #10 (Safety — Report/Block + Safety Center, see
             docs/ROADMAP.md's Phase 8). */}
         <Link to="/safety-center">

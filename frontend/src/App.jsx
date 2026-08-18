@@ -8,6 +8,7 @@ import Discovery from './pages/Discovery';
 import Matches from './pages/Matches';
 import Chat from './pages/Chat';
 import Settings from './pages/Settings';
+import DiscoveryPreferences from './pages/DiscoveryPreferences';
 import Verification from './pages/Verification';
 import BlockedUsers from './pages/BlockedUsers';
 import SafetyCenter from './pages/SafetyCenter';
@@ -82,6 +83,17 @@ function App() {
         element={
           <ProtectedRoute>
             <Verification />
+          </ProtectedRoute>
+        }
+      />
+      {/* Task #14 — Discovery Preferences (V2, user-requested: location/age
+          match preferences + incognito browsing, see docs/ROADMAP.md's V2
+          section). */}
+      <Route
+        path="/settings/discovery-preferences"
+        element={
+          <ProtectedRoute>
+            <DiscoveryPreferences />
           </ProtectedRoute>
         }
       />

@@ -126,9 +126,17 @@ browsing in this app.
     "languages": ["Hindi", "Chhattisgarhi"],
     "lifestyle": { "smoking": "no", "drinking": "socially", "diet": "vegetarian" },
     "personalityPrompts": [{ "prompt": "My love language is...", "answer": "..." }],
-    "instagramHandle": "cg_dating_user"
+    "instagramHandle": "cg_dating_user",
+    "latitude": 21.2514,
+    "longitude": 81.6296,
+    "preferences": { "maxDistanceKm": 30, "minAge": 22, "maxAge": 35, "datingIntentions": ["serious_dating"], "verifiedOnly": false },
+    "privacySettings": { "incognito": false }
   }
   ```
+  `latitude`/`longitude`/`preferences`/`privacySettings` are `[NEW, Task #14, V2,
+  user-requested]` — see "Match preferences + location/privacy settings" below for
+  the full contract; every key in all four is optional and partial-merges exactly
+  like `lifestyle` above.
 - **Validation:**
   - `dateOfBirth` must compute to an age of 18 or older (checked against whatever
     the effective date of birth is after merging with the existing profile) — `400`
@@ -194,7 +202,12 @@ directly), `gender`, `interestedIn`, `datingIntention`, `city`, `district`, `sta
 `profession`, `education`, `bio`, `interests`, `languages`, `lifestyle`,
 `personalityPrompts`, `instagramHandle` (string or `null`; see the validation note
 under `PUT /api/profile/me` above — post-MVP, self-reported, not OAuth-verified),
-`photos` (`[{ id, url, isPrimary }]`), `profileCompletionPercentage`
+`location` (`[NEW, Task #14]` — `{ lat, lng } | null`, the caller's OWN coordinate
+only, never returned for anyone else — see the Profile section's Task #14 subsection
+below), `locationSource` (`[NEW, Task #14]` — `'device' | 'approximate_city' | null`),
+`preferences` (`[NEW, Task #14]` — `{ maxDistanceKm, minAge, maxAge, datingIntentions,
+verifiedOnly }`, see below), `privacySettings` (`[NEW, Task #14]` — `{ incognito }`,
+see below), `photos` (`[{ id, url, isPrimary }]`), `profileCompletionPercentage`
 (0-100, recomputed server-side on every save; a filled `instagramHandle` contributes
 a small bonus, see `backend/utils/profileUtils.js#COMPLETION_WEIGHTS` — it is never
 required to reach 100%), `completionHints` (array of short strings, most-impactful
@@ -205,27 +218,135 @@ first, e.g. `"Add a bio to improve your profile"`), `createdAt`, `updatedAt`.
 which reuses the same public-profile serializer) — see
 `backend/utils/profileSerializers.js`. It is **not** included in the deliberately
 minimal match-list card (`GET /api/matches`), which also omits `bio` for the same
-"condensed card" reason.
+"condensed card" reason. **`location`/`preferences`/`privacySettings` are NEVER
+included in the public field set or any other user's view of this profile** — same
+"never leak someone else's settings" rule as `profileCompletionPercentage`.
+
+### Match preferences + location/privacy settings — `[NEW, Task #14, V2, user-requested]`
+"Location preference ... jaise other dating apps kaam karte hain" — persisted,
+1:1-with-profile settings that shape the CALLER'S OWN discovery feed. Read via
+`GET /api/profile/me`; written via the existing `PUT /api/profile/me` partial-merge
+body (no new endpoint — deliberately extends the same pattern already used for
+`lifestyle`/`instagramHandle`). See `docs/DATABASE_SCHEMA.md`'s `profiles.preferences`
+section for the full schema/validation contract and
+`backend/utils/matchPreferenceUtils.js` for the matching rules these feed into.
+
+- `PUT /api/profile/me` body — `{ "preferences": { "maxDistanceKm"?: number,
+  "minAge"?: number, "maxAge"?: number, "datingIntentions"?: string[],
+  "verifiedOnly"?: boolean } }` — every key optional, only the keys present are
+  changed (partial merge, same as `lifestyle`). `minAge` can **never** go below
+  `18` (hard safety floor, enforced at the route AND the schema level — same
+  `MIN_AGE` rule this codebase already applies to the caller's own age); `maxAge`
+  must be `>= minAge` (`400` otherwise); `maxDistanceKm` capped at `500`; empty/absent
+  `datingIntentions` means "any".
+- `PUT /api/profile/me` body — `{ "privacySettings": { "incognito"?: boolean } }` —
+  Private/Incognito browsing (a long-standing V2 TODO item, now implemented
+  alongside this task). `true` removes this profile from **every other user's**
+  discovery feed entirely; the caller can still browse others normally — a one-way
+  "don't show me" toggle, not a mutual block.
+- `PUT /api/profile/me` body — `{ "latitude": number, "longitude": number }` — real
+  device-coordinate capture, from the frontend's explicit-consent "Use my current
+  location" button (browser Geolocation API — never captured silently). Sets
+  `locationSource: 'device'`. **Errors:** `400` if out of range
+  (`-90<=lat<=90`, `-180<=lng<=180`).
+- **City/district → approximate coordinate fallback:** whenever `city`/`district` is
+  set/changed on a profile that has **no** `locationSource: 'device'` coordinate
+  already, the server looks up an approximate town-center coordinate from a static
+  table (`backend/constants/cgLocationOptions.js` — no geocoding API key is
+  configured for this project, see `MOCK_FEATURES.md`) and sets
+  `locationSource: 'approximate_city'`. A real device location, once set, is never
+  silently downgraded back to an approximation by a later, unrelated city/district
+  edit. A city/district not in the table simply gets no coordinate at all (`location:
+  null`) — distance filtering treats that gracefully (see below), never as an error.
+- **Errors (all `400`):** `preferences.minAge`/`preferences.maxAge` out of
+  `[18, 100]` or not a whole number; `preferences.maxAge < preferences.minAge`;
+  `preferences.maxDistanceKm` out of `[1, 500]`; `preferences.datingIntentions`
+  containing a value outside the `datingIntention` enum; invalid `latitude`/
+  `longitude`.
 
 ### Not yet implemented (moved out of this phase)
-- `PUT /api/profile/preferences` and a dedicated `preferences` collection — folded
-  into Task #4 (Discovery), not built in the profile phase.
 - `DELETE /api/profile/me/photos/:photoId` — photo removal — not built yet, only
   add is implemented.
 
-## 3. Discovery — `[IMPLEMENTED]`
+## 3. Discovery — `[IMPLEMENTED, extended by Task #14]`
 
 Base path: `/api/discovery`. All routes require auth. Routes in
 `backend/routes/discovery.js`.
 
 ### `GET /api/discovery/feed`
-- **Query params (all optional):** `page` (default `1`), `limit` (default `10`,
-  capped at `20`), `datingIntention` (must be one of the `datingIntention` enum —
-  see `docs/DATABASE_SCHEMA.md`), `city` (case-insensitive exact match).
-  **Divergence from the original draft:** `maxDistanceKm` is not implemented —
-  `profiles.location` still isn't populated by any UI, so there's no geo data to
-  filter on yet; see the `preferences` divergence note in
-  `docs/DATABASE_SCHEMA.md`.
+- **Query params (all optional):**
+  - `page` (default `1`), `limit` (default `10`, capped at `20`).
+  - `datingIntention` (must be one of the `datingIntention` enum) — **one-off
+    override**, takes precedence over the caller's persisted
+    `preferences.datingIntentions` for this single request only (unchanged Task #4
+    behavior).
+  - `city` (case-insensitive exact match) — unchanged Task #4 behavior.
+  - `[NEW, Task #14]` `maxDistanceKm` (`1`-`500`), `minAge`/`maxAge` (whole numbers,
+    `18`-`100`, `minAge<=maxAge`), `verifiedOnly` (`"true"`/`"false"`) — **one-off
+    overrides** of the caller's persisted `preferences` for this single request
+    only, never persisted ("search wider" UX — see
+    `frontend/src/pages/Discovery.jsx`'s "Search wider" button). Invalid values
+    return `400` with a field-specific message. Omit any of these to use the
+    caller's saved `preferences` (see the Profile section above); a caller who has
+    never set preferences gets the documented defaults
+    (`maxDistanceKm=50, minAge=18, maxAge=45`).
+- **CRITICAL correctness fix, Task #14 audit finding:** before this task, this feed
+  applied **no gender filtering at all**, in either direction — any candidate's
+  gender was shown to any caller regardless of either side's stated `interestedIn`.
+  Now, a candidate is only returned if **BOTH**: (a) the candidate's gender is
+  something the caller's `interestedIn` wants to see, AND (b) the caller's gender is
+  something the candidate's `interestedIn` wants to see — a real-app-standard
+  bidirectional rule ("don't show me someone who isn't interested in my gender
+  either"). An empty/unset `interestedIn` on either side is treated as permissive
+  ("open to anyone"), matching this codebase's existing convention for other unset
+  optional preferences. See `backend/utils/matchPreferenceUtils.js#isGenderMutuallyCompatible()`
+  for the exact rule (the query itself implements the same rule directly in
+  MongoDB for efficiency — the two are kept in sync deliberately, see that file's
+  header comment).
+- **`[NEW, Task #14]` Bidirectional age matching:** a candidate is only returned if
+  **BOTH**: (a) the candidate's own age falls inside the caller's effective
+  `[minAge, maxAge]`, AND (b) the caller's own age falls inside the candidate's
+  own stated `preferences.minAge`/`maxAge` — exactly how real dating apps avoid
+  showing you to people who've said they don't want your age range. See
+  `backend/utils/matchPreferenceUtils.js#isAgeMutuallyCompatible()`/
+  `dobRangeForAgeRange()`.
+- **`[NEW, Task #14]` Dating-intention preference filtering:** when the caller has a
+  non-empty `preferences.datingIntentions` and no `?datingIntention=` override is
+  present, only candidates whose `datingIntention` is in that list are returned.
+- **`[NEW, Task #14]` `preferences.verifiedOnly`:** when set, only candidates with
+  `photoVerification.status === 'VERIFIED'` (Task #9's `photoVerified` boolean) are
+  returned.
+- **`[NEW, Task #14]` Distance-based filtering:** candidates further than the
+  caller's effective `maxDistanceKm` are excluded — **but only when both sides have
+  a resolvable coordinate** (real device location or the city-approximation
+  fallback, see the Profile section above). If EITHER side has no coordinate at
+  all, the candidate is gracefully **included** (never excluded for a data gap),
+  with `distanceKm: null` on that candidate. **Implementation note (why this isn't
+  a native MongoDB geo query):** distance filtering runs in application code, after
+  the page's DB-level `skip`/`limit`, using the haversine formula
+  (`backend/utils/geoUtils.js#haversineDistanceKm()`/`isWithinDistance()`) — not a
+  `$near`/`$geoWithin` Mongo query — specifically because most profiles will only
+  ever have an *approximate* city-center coordinate (no geocoding API key is
+  configured for this project, see `MOCK_FEATURES.md`) and because the "gracefully
+  include, never exclude, a profile with no coordinate" rule is much simpler to get
+  right in plain JS than in a Mongo geo-query expression. **Known limitation:**
+  because this filtering happens after the page's DB slice, a page can legitimately
+  return fewer than `limit` profiles when `maxDistanceKm` meaningfully narrows the
+  pool, even though more distant matches exist further into the collection — the
+  documented workaround is a larger one-off `?maxDistanceKm=` override ("search
+  wider"). The `2dsphere` index on `profiles.location` remains in place for a
+  future real geospatial query (e.g. Task #19's ranking layer) but isn't the
+  mechanism this endpoint uses.
+- Each returned profile carries a `[NEW, Task #14]` `distanceKm` field (`number |
+  null`) — the caller's actual computed distance to that candidate, or `null` if
+  unknown. Exposed for both the frontend UI and Task #19's future ranking layer.
+- The response also includes `[NEW, Task #14]` `appliedPreferences` — the fully
+  resolved `{ maxDistanceKm, minAge, maxAge, datingIntentions, verifiedOnly }` that
+  was actually applied to this request (persisted values merged with any query-param
+  overrides) — lets the frontend show "showing wider results" banners accurately.
+- **`[NEW, Task #14]` Incognito exclusion:** any profile with
+  `privacySettings.incognito: true` is excluded from every OTHER user's feed
+  entirely (the incognito user can still browse others normally).
 - Excludes: the caller, anyone the caller has already swiped on (like or pass —
   either decision means "don't show again"), anyone the caller is already
   matched with, — `[IMPLEMENTED]`, Task #10, see this doc's Safety section
@@ -239,8 +360,10 @@ Base path: `/api/discovery`. All routes require auth. Routes in
   Profiles missing `displayName`/`dateOfBirth`/`gender` (i.e. not complete
   enough to be worth showing) are also excluded.
 - **Success response:** `200 OK` —
-  `{ "profiles": [ <public profile, see docs/API_DOCUMENTATION.md's Profile section> ], "page": 1, "hasMore": true }`
-- **Errors:** `400` — invalid `datingIntention`; `404` — caller has no profile yet
+  `{ "profiles": [ <public profile + distanceKm, see above> ], "page": 1, "hasMore": true, "appliedPreferences": {...} }`
+- **Errors:** `400` — invalid `datingIntention`, or an invalid `maxDistanceKm`/
+  `minAge`/`maxAge` override (out of range, not a whole number, or `maxAge <
+  minAge`); `404` — caller has no profile yet
   (`{ "message": "Create your profile before browsing discovery" }`); `401`; `500`.
 
 ### `POST /api/discovery/swipe`

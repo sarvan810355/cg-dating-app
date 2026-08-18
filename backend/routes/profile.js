@@ -21,6 +21,11 @@ const {
   BIO_MAX_LENGTH,
   INSTAGRAM_HANDLE_REGEX,
 } = require('../constants/profileOptions');
+const {
+  MAX_DISTANCE_KM_CAP,
+  MAX_AGE_PREF_CAP,
+} = require('../constants/discoveryOptions');
+const { resolveApproxCoordinates } = require('../utils/geoUtils');
 
 const router = express.Router();
 
@@ -241,6 +246,119 @@ function validateProfileInput(body, { isCreate }) {
     }
   }
 
+  // --- Real coordinate capture (Task #14, V2, user-requested) ---
+  // Optional `latitude`/`longitude` — set from the browser's geolocation API
+  // after explicit user consent (frontend/src/pages/ProfileBuilder.jsx's
+  // "Use my current location" button), NEVER captured silently. Takes
+  // precedence over the city/district approximation fallback applied below
+  // in the route handler (marks `locationSource: 'device'`).
+  if (body.latitude !== undefined || body.longitude !== undefined) {
+    const lat = Number(body.latitude);
+    const lng = Number(body.longitude);
+    if (
+      !Number.isFinite(lat) ||
+      lat < -90 ||
+      lat > 90 ||
+      !Number.isFinite(lng) ||
+      lng < -180 ||
+      lng > 180
+    ) {
+      errors.push('latitude must be between -90 and 90, and longitude between -180 and 180');
+    } else {
+      updates.location = { type: 'Point', coordinates: [lng, lat] };
+      updates.locationSource = 'device';
+    }
+  }
+
+  // --- Match preferences (Task #14, V2, user-requested — "location
+  // preference ... jaise other dating apps kaam karte hain"). Partial-merge
+  // sub-object, same pattern as `lifestyle` above: only the keys present in
+  // the request body are validated/updated, existing stored values for
+  // omitted keys are preserved (see the merge logic in PUT /me below). ---
+  if (body.preferences !== undefined) {
+    if (
+      typeof body.preferences !== 'object' ||
+      body.preferences === null ||
+      Array.isArray(body.preferences)
+    ) {
+      errors.push('preferences must be an object');
+    } else {
+      const { maxDistanceKm, minAge, maxAge, datingIntentions, verifiedOnly } = body.preferences;
+      const prefs = {};
+
+      if (maxDistanceKm !== undefined) {
+        const v = Number(maxDistanceKm);
+        if (!Number.isFinite(v) || v < 1 || v > MAX_DISTANCE_KM_CAP) {
+          errors.push(`preferences.maxDistanceKm must be between 1 and ${MAX_DISTANCE_KM_CAP}`);
+        } else {
+          prefs.maxDistanceKm = Math.round(v);
+        }
+      }
+
+      if (minAge !== undefined) {
+        const v = Number(minAge);
+        // Hard safety rule: never below MIN_AGE (18), same floor already
+        // enforced on the user's OWN age (dateOfBirth) elsewhere in this
+        // route — applied here to the age the user is willing to see
+        // OTHERS at.
+        if (!Number.isInteger(v) || v < MIN_AGE || v > MAX_AGE_PREF_CAP) {
+          errors.push(`preferences.minAge must be a whole number between ${MIN_AGE} and ${MAX_AGE_PREF_CAP}`);
+        } else {
+          prefs.minAge = v;
+        }
+      }
+
+      if (maxAge !== undefined) {
+        const v = Number(maxAge);
+        if (!Number.isInteger(v) || v < MIN_AGE || v > MAX_AGE_PREF_CAP) {
+          errors.push(`preferences.maxAge must be a whole number between ${MIN_AGE} and ${MAX_AGE_PREF_CAP}`);
+        } else {
+          prefs.maxAge = v;
+        }
+      }
+
+      if (datingIntentions !== undefined) {
+        if (!Array.isArray(datingIntentions)) {
+          errors.push('preferences.datingIntentions must be an array');
+        } else {
+          const values = datingIntentions.map((v) => String(v).trim());
+          const invalid = values.filter((v) => !DATING_INTENTIONS.includes(v));
+          if (invalid.length) {
+            errors.push(`preferences.datingIntentions contains invalid values: ${invalid.join(', ')}`);
+          } else {
+            prefs.datingIntentions = [...new Set(values)];
+          }
+        }
+      }
+
+      if (verifiedOnly !== undefined) {
+        prefs.verifiedOnly = !!verifiedOnly;
+      }
+
+      if (!errors.some((e) => e.startsWith('preferences'))) {
+        updates.preferences = prefs;
+      }
+    }
+  }
+
+  // --- Privacy settings (Task #14 also covers Private/Incognito browsing) ---
+  if (body.privacySettings !== undefined) {
+    if (
+      typeof body.privacySettings !== 'object' ||
+      body.privacySettings === null ||
+      Array.isArray(body.privacySettings)
+    ) {
+      errors.push('privacySettings must be an object');
+    } else {
+      const { incognito } = body.privacySettings;
+      const settings = {};
+      if (incognito !== undefined) {
+        settings.incognito = !!incognito;
+      }
+      updates.privacySettings = settings;
+    }
+  }
+
   if (isCreate) {
     const missing = [];
     if (!updates.displayName) missing.push('displayName');
@@ -296,15 +414,52 @@ router.put('/me', requireAuth, async (req, res) => {
     }
 
     Object.entries(updates).forEach(([key, value]) => {
-      if (key === 'lifestyle') {
-        const current = profile.lifestyle && profile.lifestyle.toObject
-          ? profile.lifestyle.toObject()
-          : profile.lifestyle || {};
-        profile.lifestyle = { ...current, ...value };
+      if (key === 'lifestyle' || key === 'preferences' || key === 'privacySettings') {
+        // Partial-merge sub-object: only the keys present in this request
+        // are overwritten, everything else already stored is preserved —
+        // same pattern already used for `lifestyle`.
+        const current =
+          profile[key] && profile[key].toObject ? profile[key].toObject() : profile[key] || {};
+        profile[key] = { ...current, ...value };
       } else {
         profile[key] = value;
       }
     });
+
+    // Cross-field check (mirrors the schema-level pre('validate') guard in
+    // backend/models/Profile.js — checked here too so the route can return
+    // a clear 400 with a field-specific message rather than a generic
+    // ValidationError string).
+    if (
+      profile.preferences?.minAge != null &&
+      profile.preferences?.maxAge != null &&
+      profile.preferences.maxAge < profile.preferences.minAge
+    ) {
+      return res
+        .status(400)
+        .json({ message: 'preferences.maxAge must be greater than or equal to preferences.minAge' });
+    }
+
+    // --- City/district -> approximate coordinates fallback (Task #14) ---
+    // Only applies when this request didn't already set a precise device
+    // location (`updates.location` above) AND the profile doesn't already
+    // have one captured via real device geolocation — a city-name guess
+    // must never silently downgrade/overwrite a real GPS point the user
+    // explicitly granted. Runs whenever city/district changed (or on first
+    // creation, when they're being set for the first time) so a profile
+    // gets *some* usable coordinate for distance filtering even though this
+    // project has no geocoding API key configured (see MOCK_FEATURES.md).
+    if (
+      updates.location === undefined &&
+      profile.locationSource !== 'device' &&
+      (updates.city !== undefined || updates.district !== undefined)
+    ) {
+      const approx = resolveApproxCoordinates(profile.city, profile.district);
+      if (approx) {
+        profile.location = { type: 'Point', coordinates: approx };
+        profile.locationSource = 'approximate_city';
+      }
+    }
 
     await profile.save();
 
