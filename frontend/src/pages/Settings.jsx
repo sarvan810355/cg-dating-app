@@ -267,6 +267,14 @@ function Settings() {
           </Button>
         </Link>
 
+        {/* Task #17 — Referral program ("Invite & Earn", V2 scope, see
+            docs/BUSINESS_PLAN.md's Growth Strategy). */}
+        <Link to="/referrals">
+          <Button variant="ghost" className="mt-2 w-full">
+            Invite &amp; Earn
+          </Button>
+        </Link>
+
         {/* Task #11 — Admin panel (see docs/ROADMAP.md's Phase 9). Only
             rendered for ADMIN/SUPER_ADMIN/MODERATOR — per the task spec, this
             link (and the /admin section it points to) must be effectively

@@ -12,6 +12,7 @@ import Verification from './pages/Verification';
 import BlockedUsers from './pages/BlockedUsers';
 import SafetyCenter from './pages/SafetyCenter';
 import Subscription from './pages/Subscription';
+import Referrals from './pages/Referrals';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminReports from './pages/AdminReports';
 import AdminVerifications from './pages/AdminVerifications';
@@ -102,6 +103,14 @@ function App() {
         element={
           <ProtectedRoute>
             <Subscription />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/referrals"
+        element={
+          <ProtectedRoute>
+            <Referrals />
           </ProtectedRoute>
         }
       />

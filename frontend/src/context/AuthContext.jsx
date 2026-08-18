@@ -30,8 +30,8 @@ export function AuthProvider({ children }) {
     refreshUser();
   }, [refreshUser]);
 
-  async function signup(email, password) {
-    const data = await api.signup(email, password);
+  async function signup(email, password, referralCode) {
+    const data = await api.signup(email, password, referralCode);
     api.setToken(data.token);
     setUser(data.user);
     return data.user;

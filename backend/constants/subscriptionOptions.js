@@ -28,12 +28,17 @@ const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 const SUBSCRIPTION_STATUSES = ['ACTIVE', 'EXPIRED', 'CANCELLED'];
 
-// The only payment provider integration in this codebase, and it's a MOCK —
-// see MOCK_FEATURES.md and backend/routes/subscription.js's route-level
-// comment. Kept as a single-value enum (rather than a free string) so a
-// real Razorpay integration later is a deliberate schema change, not a
+// `mock_razorpay` is the only real payment-collection integration in this
+// codebase, and it's a MOCK — see MOCK_FEATURES.md and
+// backend/routes/subscription.js's route-level comment. `referral_reward`
+// (Task #17 — Invite & Earn, V2 scope) is not a payment at all — it marks a
+// Subscription document granted for free as a referral bonus (see
+// backend/utils/referralUtils.js#grantReferralReward()) — kept in this same
+// enum (rather than a separate field) so every Subscription row's origin is
+// traceable from one place. Kept as a fixed enum (rather than a free
+// string) so a new grant path is always a deliberate schema change, not a
 // silent value drift.
-const PAYMENT_PROVIDERS = ['mock_razorpay'];
+const PAYMENT_PROVIDERS = ['mock_razorpay', 'referral_reward'];
 
 // Feature flags a Plan can carry (Plan.features, array of these strings).
 // Checked server-side only via backend/utils/entitlementUtils.js#hasFeature()

@@ -15,6 +15,7 @@ const verificationRouter = require('./routes/verification');
 const reportsRouter = require('./routes/reports');
 const blocksRouter = require('./routes/blocks');
 const subscriptionRouter = require('./routes/subscription');
+const referralsRouter = require('./routes/referrals');
 const adminRouter = require('./routes/admin');
 const { initSocket } = require('./socket');
 const { seedDefaultPlans } = require('./utils/entitlementUtils');
@@ -47,6 +48,11 @@ app.use('/api/blocks', blocksRouter);
 // /api/subscriptions (plural) + /api/payments base paths — see
 // docs/API_DOCUMENTATION.md's Subscription section for the divergence note.
 app.use('/api', subscriptionRouter);
+// Task #17 — Referral program ("Invite & Earn", V2 scope). Mounted at the
+// bare /api root (same pattern as subscriptionRouter just above) since the
+// router declares its own full path (GET /api/referrals/me) rather than a
+// base-path prefix.
+app.use('/api', referralsRouter);
 // Task #11 — Admin panel (see docs/ROADMAP.md's Phase 9). Every route in
 // backend/routes/admin.js is auth + role-gated internally (requireAuth +
 // requireRole(...) per route) — nothing here needs to change based on who's

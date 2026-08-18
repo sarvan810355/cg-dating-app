@@ -52,6 +52,31 @@ search, and friendship, with dating intention as a first-class field.
   district across Chhattisgarh, then statewide, then national (later phase).
 - **Local marketing channels:** Instagram, YouTube, local influencers, college
   ambassador programs, and a referral program ("Invite & Earn", V2 scope).
+  **Implemented (Task #17):** every user gets a unique, human-shareable
+  referral code at signup. When someone signs up using another user's code,
+  **both the referrer and the new referee are granted 7 days of `CG_PLUS`**
+  (currently priced at ₹299/month, see the seed pricing above), via the same
+  `Subscription`/`Plan`/`hasFeature()` entitlement system that powers real
+  paid plans — not a separate points/credits currency. Chosen over an
+  invented currency (e.g. "boost credits") specifically because no such
+  currency existed elsewhere in the codebase at implementation time, and
+  reusing Task #12's already-server-side-validated entitlement system avoids
+  a second, parallel "what can this user do" mechanism the rest of the
+  product would need to learn about. 7 days is deliberately modest — enough
+  to be a genuinely felt, shareable incentive (unlimited likes + advanced
+  filters for a week) without materially cannibalizing paid conversions for
+  either the referrer or the referee, and short enough that a determined
+  self-referral-loop abuser (creating throwaway accounts to farm rewards)
+  gains very little per cycle relative to the effort, on top of the
+  anti-abuse protections below. A referral relationship is permanent and
+  one-time per referee (schema-enforced, not just app logic — see
+  `docs/DATABASE_SCHEMA.md`'s `referrals` section), and an invalid/mistyped
+  referral code at signup never blocks account creation, only silently skips
+  the reward (see `docs/API_DOCUMENTATION.md`'s Section 13 for the full
+  route contract). See `MOCK_FEATURES.md` for what's still a scope
+  reduction here (no real dynamic-link/deferred-deep-link infrastructure —
+  the "shareable link" is a plain copyable code + message, not a trackable
+  URL).
 - **Brand personality:** modern, local, trustworthy, premium, respectful, safe —
   explicitly **not** cheap, spammy, or manipulative (e.g. no fake urgency, no dark
   patterns around payments or "who liked you" reveals).

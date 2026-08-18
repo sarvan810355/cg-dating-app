@@ -135,6 +135,42 @@ const UserSchema = new mongoose.Schema(
     // ---
     dailyLikeCount: { type: Number, default: 0 },
     lastLikeCountReset: { type: Date, default: null },
+
+    // --- Referral program (Task #17 — Invite & Earn, V2 scope; see
+    // docs/BUSINESS_PLAN.md's Growth Strategy and TODO.md's V2 section). ---
+    // Every user gets a short, human-shareable, unique referral code
+    // generated at signup time (backend/routes/auth.js — see
+    // backend/utils/referralUtils.js#generateUniqueReferralCode() for the
+    // retry-on-collision generation strategy). `unique: true` here is the
+    // schema-level guarantee, not just the generator's own pre-check.
+    referralCode: {
+      type: String,
+      unique: true,
+      // sparse: lets pre-existing documents (from before this field
+      // existed, if any) coexist without all colliding on `null` under the
+      // unique index — every user created via the signup route after this
+      // change always has one, so this only matters for old/seed data.
+      sparse: true,
+      uppercase: true,
+      trim: true,
+    },
+    // Who referred this user in, set at most once — at signup, if a valid
+    // referral code was provided (backend/routes/auth.js). `immutable: true`
+    // is the actual anti-abuse enforcement the task requires ("enforced by
+    // the schema, not just app logic"): Mongoose ignores any attempt to
+    // change this path on an existing (non-new) document, so there is no
+    // way to retroactively link/relink a referral after account creation
+    // even if some future route accidentally tried to `.save()` a change to
+    // it — not just that no such route exists today (it doesn't; referral
+    // linking only ever happens inline in the signup handler, on the
+    // brand-new document, where `immutable` does not block the initial
+    // set).
+    referredBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      immutable: true,
+    },
   },
   { timestamps: true }
 );
@@ -143,5 +179,14 @@ const UserSchema = new mongoose.Schema(
 // DATABASE_SCHEMA.md's `users` section already called this out as a planned
 // index, ahead of the role field itself existing).
 UserSchema.index({ role: 1 });
+// Task #17 — Referral program: "how many people has this user referred" is
+// computed on demand via User.countDocuments({ referredBy: userId })
+// (GET /api/referrals/me, backend/routes/referrals.js) rather than a
+// denormalized counter — simpler for MVP and avoids counter-drift bugs
+// (same "computed, not denormalized" choice already documented for
+// profiles.profileCompletionPercentage). This index makes that count query
+// (and "who did this user refer" lookups generally) an index scan, not a
+// collection scan.
+UserSchema.index({ referredBy: 1 });
 
 module.exports = mongoose.model('User', UserSchema);

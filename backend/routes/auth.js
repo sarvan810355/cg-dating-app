@@ -5,8 +5,20 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { requireAuth } = require('../middleware/auth');
 const { loginLimiter, signupLimiter } = require('../middleware/rateLimiters');
+const {
+  generateUniqueReferralCode,
+  isValidReferralCodeFormat,
+  normalizeReferralCode,
+  grantMutualReferralReward,
+} = require('../utils/referralUtils');
 
 const router = express.Router();
+
+// Task #17 — Referral program: retry budget for the rare case where
+// User.create() itself throws a duplicate-key error on `referralCode`
+// (a genuine concurrent-signup race that generateUniqueReferralCode()'s own
+// pre-check didn't catch — see backend/utils/referralUtils.js's comment).
+const SIGNUP_REFERRAL_CODE_RETRY_ATTEMPTS = 3;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MIN_PASSWORD_LENGTH = 8;
@@ -35,7 +47,7 @@ function toPublicUser(user) {
 // POST /api/auth/signup
 router.post('/signup', signupLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body || {};
+    const { email, password, referralCode } = req.body || {};
 
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
@@ -56,8 +68,78 @@ router.post('/signup', signupLimiter, async (req, res) => {
       return res.status(409).json({ message: 'An account with this email already exists' });
     }
 
+    // Task #17 — Referral program (V2 scope, see docs/BUSINESS_PLAN.md's
+    // Growth Strategy). `referralCode` is optional. Documented UX choice:
+    // an invalid/typo'd/unknown code does NOT reject the signup — it's
+    // silently (from the caller's perspective) dropped, only logged as a
+    // warning server-side, and the account is created as normal without a
+    // referral relationship. This matches how real referral programs
+    // behave (a mistyped code shouldn't block someone from creating an
+    // account) and is the explicitly preferred option per this task's
+    // spec ("pick the more user-friendly option and document your
+    // choice"). The referrer must already have an account for their code
+    // to exist at all, so "can't refer yourself" is structurally
+    // impossible at signup time (the new user's own code doesn't exist
+    // yet) — no separate self-referral check is needed.
+    let referrer = null;
+    if (referralCode !== undefined && referralCode !== null && referralCode !== '') {
+      const normalizedCode = normalizeReferralCode(referralCode);
+      if (!isValidReferralCodeFormat(normalizedCode)) {
+        console.warn(
+          `Signup referral code ignored (bad format) for ${normalizedEmail}: ${JSON.stringify(referralCode)}`
+        );
+      } else {
+        // eslint-disable-next-line no-await-in-loop -- single lookup, not a loop
+        referrer = await User.findOne({ referralCode: normalizedCode });
+        if (!referrer) {
+          console.warn(
+            `Signup referral code ignored (no matching user) for ${normalizedEmail}: ${normalizedCode}`
+          );
+        }
+      }
+    }
+
     const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
-    const user = await User.create({ email: normalizedEmail, password: hashedPassword });
+
+    // Retry loop covers the (extremely unlikely) case of a genuine
+    // concurrent-signup race on the generated referralCode's uniqueness —
+    // see backend/utils/referralUtils.js's comment and
+    // SIGNUP_REFERRAL_CODE_RETRY_ATTEMPTS above.
+    let user;
+    for (let attempt = 0; attempt < SIGNUP_REFERRAL_CODE_RETRY_ATTEMPTS; attempt += 1) {
+      const newReferralCode = await generateUniqueReferralCode();
+      try {
+        // eslint-disable-next-line no-await-in-loop -- retrying the same
+        // logical create() on collision, not an independent batch of work
+        user = await User.create({
+          email: normalizedEmail,
+          password: hashedPassword,
+          referralCode: newReferralCode,
+          // Set once, at creation — Mongoose's `immutable: true` on this
+          // path (backend/models/User.js) then blocks any later change.
+          referredBy: referrer ? referrer._id : null,
+        });
+        break;
+      } catch (createErr) {
+        const isReferralCodeCollision =
+          createErr.code === 11000 && createErr.keyPattern && createErr.keyPattern.referralCode;
+        if (isReferralCodeCollision && attempt < SIGNUP_REFERRAL_CODE_RETRY_ATTEMPTS - 1) {
+          continue; // regenerate and retry
+        }
+        throw createErr;
+      }
+    }
+
+    // Reward both sides of a completed referral (Task #12's Subscription
+    // system, see backend/utils/referralUtils.js for the exact mechanism).
+    // Awaited (not fire-and-forget) so the reward is reliably granted
+    // before the response is sent, but still isolated from the signup
+    // response's success path via its own internal try/catch per side
+    // (see grantMutualReferralReward's own comment) — a reward-grant
+    // failure never turns a successful signup into an error response.
+    if (referrer) {
+      await grantMutualReferralReward(referrer._id, user._id);
+    }
 
     const token = signToken(user._id);
     return res.status(201).json({ token, user: toPublicUser(user) });
