@@ -58,9 +58,32 @@ Core account/auth record.
   (`docs/BUSINESS_PLAN.md`) needed *some* per-user counter, and this is the
   same "1:1-with-user, always-fetched-together account state" pattern
   already used for `notificationPreferences`/`mobileVerification` above.
+- `referralCode` — `[IMPLEMENTED, Task #17]` string, unique (sparse), uppercase,
+  7 characters, drawn from an alphabet that excludes visually-ambiguous
+  characters (`0`/`O`, `1`/`I` — see
+  `backend/constants/referralOptions.js#REFERRAL_CODE_ALPHABET`). Generated at
+  signup time (`backend/routes/auth.js`, via
+  `backend/utils/referralUtils.js#generateUniqueReferralCode()` — pre-checks
+  uniqueness with retry-on-collision, with the schema's own `unique` index as
+  the final race-safe guard; `User.create()` retries with a freshly generated
+  code on the rare genuine collision). See the `referrals` section below for
+  the full program writeup.
+- `referredBy` — `[IMPLEMENTED, Task #17]` ref `users`, nullable, default
+  `null`. Set **at most once**, only at signup, only if a valid referral code
+  was provided (`backend/routes/auth.js`) — never changeable afterward.
+  **Enforced at the schema level** via Mongoose's `immutable: true` (not just
+  app logic): the initial set on the brand-new document at creation is
+  allowed, but any later attempt to reassign the field on an already-saved
+  document is silently ignored by Mongoose itself, and no route in this
+  codebase ever attempts to write to it after creation anyway (referral
+  linking only ever happens inline in the signup handler). See the
+  `referrals` section below.
 - `createdAt`, `updatedAt`, `lastLoginAt`
 - Indexes: unique+sparse on `email`; index on `role` (admin queries — see
-  `admin_users` below, now `[IMPLEMENTED]`).
+  `admin_users` below, now `[IMPLEMENTED]`); unique+sparse on `referralCode`;
+  index on `referredBy` (Task #17 — "how many people has this user referred"
+  is computed on demand via `User.countDocuments({ referredBy: userId })`
+  rather than a denormalized counter, see the `referrals` section below).
   **Divergence:** `phone` is **not** unique-indexed in the implemented
   schema (`backend/models/User.js`) — signup doesn't collect a phone number
   at all (email/password only), and Task #9 lets a caller set/change their
@@ -224,6 +247,19 @@ Implemented in `backend/models/Match.js`; routes in `backend/routes/matches.js`
   guard, race-safe because both swipe directions canonicalize to the identical
   pair before insert; index on `users` (array) for "all matches involving this
   user" queries.
+- **`compatibility` (Why-You-Match) is deliberately NOT a field on this document —
+  `[NEW, Task #15, V2, user-requested, added 2026-08-18]`.** `GET /api/matches` and
+  `GET /api/matches/:matchId/compatibility` (`backend/routes/matches.js`) both compute
+  `{ score, reasons }` live, on every call, from the two participants' current `Profile`
+  documents (`backend/utils/compatibilityUtils.js`) rather than storing/caching it here —
+  a profile can change at any time (new interests, a different bio), and re-deriving a
+  cheap, pure, in-memory heuristic on every read is simpler and always-fresh, unlike
+  `profileCompletionPercentage` (recomputed on every `Profile` *save*, since that one is
+  read far more often relative to how often a profile changes). **Deterministic heuristic,
+  NOT a real AI/LLM call** — see `MOCK_FEATURES.md` and `docs/API_DOCUMENTATION.md`'s
+  "Why-You-Match & Smart Icebreakers" section. Smart Icebreakers
+  (`backend/utils/icebreakerUtils.js`, `GET /api/matches/:matchId/icebreakers`) are
+  computed the same way — live, never persisted.
 
 ### `conversations` — **not implemented as a separate collection**
 **Divergence, implemented for Task #5 (Chat):** a `Match` document already
@@ -576,24 +612,153 @@ the full mock-checkout explanation.
   `users`, array)
 - Indexes: `2dsphere` on `location`; index on `startsAt`.
 
-### `date_plans`
-(V2 — Date Planner)
-- `_id`, `matchId` (ref `matches`), `createdBy` (ref `users`), `ideaText`, `venue`,
-  `scheduledAt`, `status` (`PROPOSED`, `CONFIRMED`, `CANCELLED`)
-- Indexes: index on `matchId`.
+### `date_plans` — **not implemented as a persisted collection; see the Date Planner note below**
+(V2 — Date Planner, Task #18, see `docs/ROADMAP.md`'s Phase 12) **Divergence from the
+original draft:** the Date Planner shipped as a **stateless suggestion generator**,
+not a persisted "proposed date plan" record — `GET /api/date-ideas` (see
+`docs/API_DOCUMENTATION.md`) takes `budget`/`activityType`/`city` and returns 2-4
+curated suggestions from an in-code static list
+(`backend/utils/datePlanUtils.js`), nothing is saved. This is explicitly **not real
+AI** — no `ANTHROPIC_API_KEY` is configured for this project (same constraint already
+documented for Task #15's Icebreakers/Why-You-Match). If a future pass wants users to
+actually *save* a chosen idea against a specific match (rather than just browsing
+suggestions), this draft shape (`matchId`, `createdBy`, `ideaText`, `venue`,
+`scheduledAt`, `status`) remains the right target — not built in this pass because the
+product spec's own wording ("suggest 2-4 practical date-idea suggestions") only asked
+for the suggestion side.
 
-### `safe_dates`
-(V2 — Safe Date mode)
-- `_id`, `userId` (ref `users`, indexed), `matchId` (ref `matches`), `trustedContactId`
-  (ref `users` or external contact info), `scheduledAt`, `checkInStatus`
-  (`PENDING`, `CHECKED_IN`, `MISSED`, `SOS_TRIGGERED`), `location` (GeoJSON `Point`)
-- Indexes: index on `(userId, scheduledAt)`.
+### `safe_dates` — `[IMPLEMENTED, Task #18, with divergences from the original draft below]`
+(V2 — Safe Date mode, see `docs/ROADMAP.md`'s Phase 12) Implemented in
+`backend/models/SafeDate.js`; routes in `backend/routes/safeDates.js`; read-time
+status computation in `backend/utils/safeDateUtils.js`.
 
-### `referrals`
-(V2 — Invite & Earn)
-- `_id`, `referrerUserId` (ref `users`, indexed), `refereeUserId` (ref `users`),
-  `code`, `status` (`PENDING`, `REWARDED`), `rewardedAt`
-- Indexes: unique on `code`; index on `referrerUserId`.
+**Divergences from the original draft:** `userId` → `user`, `matchId` → `match`
+(matches this codebase's `ref`-naming convention already used by `Like.fromUser`/
+`Match.userA`/`Report.reporter` etc. — drops the `Id` suffix on ref fields);
+`scheduledAt` split into `plannedStartAt`/`plannedEndAt` (a real time *window*, not a
+single instant — needed for the "well past the date's end and still no check-in"
+missed-check-in computation, see below); `checkInStatus` → `status`, with the enum
+widened from the draft's `PENDING`/`CHECKED_IN`/`MISSED`/`SOS_TRIGGERED` to
+`PLANNED`/`CHECKED_IN`/`COMPLETED`/`MISSED_CHECKIN`/`CANCELLED` — `COMPLETED` and
+`CANCELLED` are genuine user actions the draft didn't have a slot for (see
+`docs/API_DOCUMENTATION.md`'s Safe Date section), and `SOS_TRIGGERED` was dropped
+entirely (see the safety-alerting note below — there's no real trusted-contact
+alerting path to trigger); `trustedContactId` (ref `users` or external contact info)
+→ plain `trustedContactName`/`trustedContactPhone` strings — a trusted contact is
+almost never an existing app user, so this is free-text, not a `ref`; `location`
+changed from a GeoJSON `Point` to **free text** — see the privacy note below, this is
+an explicit, deliberate divergence, not a simplification-for-later.
+- `_id`, `user` (ref `users`, required, indexed), `match` (ref `matches`, optional —
+  this feature is meant for meeting a match, but a plan can still be created without
+  one), `location` (free text, required, max 200 chars), `plannedStartAt`,
+  `plannedEndAt` (both `Date`, required, `plannedEndAt` must be after
+  `plannedStartAt`), `trustedContactName` (optional string, max 100 chars),
+  `trustedContactPhone` (optional string, max 20 chars — see the note below),
+  `status` (enum as above, default `PLANNED`), `checkedInAt`/`completedAt`/
+  `cancelledAt` (each `Date`, `null` until that transition happens),
+  `reminderNotifiedAt` (`Date`, `null` until the read-time reminder notification has
+  fired once — see below), `createdAt`, `updatedAt`.
+- Indexes: compound on `(user, plannedStartAt)` — the actual "my Safe Date plans,
+  upcoming + past" access pattern (`GET /api/safe-dates`).
+
+**Privacy requirement (explicit product-spec rule):** `location` is free text
+describing an "approximate public location" — **never exact GPS coordinates, and
+never silently tracked.** There is no device-location field anywhere on this model;
+nothing in this feature reads the device's real-time position at all. This is a
+deliberate divergence from the original draft's GeoJSON `Point`, not a scope gap to
+fill in later — see `backend/models/SafeDate.js`'s model-level comment.
+
+**"Missed check-in" is a READ-TIME computation, not a real background job or a real
+alert to the trusted contact.** There is no job scheduler anywhere in this codebase
+(no `node-cron`, no task queue) and no real SMS/push provider — see
+`MOCK_FEATURES.md`'s Safe Date entry for the full explanation. Every
+`GET /api/safe-dates`/`GET /api/safe-dates/:id` call recomputes, fresh:
+- `isOverdue` (returned, not stored) — `true` once a still-`PLANNED` date is more than
+  30 minutes past `plannedStartAt` with no check-in yet (`CHECKIN_GRACE_MINUTES`,
+  `backend/constants/safeDateOptions.js`), and stays `true` for a `MISSED_CHECKIN`
+  date.
+- A `PLANNED` date more than 120 minutes past `plannedEndAt`
+  (`MISSED_CHECKIN_GRACE_MINUTES`) with no check-in is **persisted** to `status:
+  'MISSED_CHECKIN'` at that read — the only write this computation ever makes to
+  `status`.
+- `isReminderWindow` (returned, not stored) — `true` when `now` falls within 60
+  minutes before `plannedStartAt` (`REMINDER_WINDOW_MINUTES`) for a still-`PLANNED`
+  date. The first time a read lands inside this window, a real in-app `Notification`
+  (type `'safety'`, reusing `backend/utils/notificationUtils.js#createNotification()`
+  — the same helper every other notification trigger point uses) is created and
+  `reminderNotifiedAt` is set so it never fires twice. **This notification is real
+  (persisted, live-socket-delivered) but only ever fires if/when the owner's own
+  client happens to call a GET route while inside the window — there is no scheduler
+  making sure that happens close to `plannedStartAt`,** unlike a true push reminder.
+- **No SMS/call is ever sent to the trusted contact, for a reminder or a missed
+  check-in.** `trustedContactPhone` is stored purely for the user's own reference —
+  see the field note above and `MOCK_FEATURES.md`.
+
+### `referrals` — **not implemented as a separate collection**
+`[IMPLEMENTED, Task #17 — Invite & Earn, V2 scope, with divergences from the
+original draft below]`. Implemented in `backend/models/User.js` (the
+`referralCode`/`referredBy` fields — see the `users` section above),
+`backend/routes/auth.js` (signup-time linking), `backend/routes/referrals.js`
+(`GET /api/referrals/me`), and `backend/utils/referralUtils.js` (code
+generation + reward granting).
+
+**Divergence from the original draft:** no separate `referrals` collection
+was built. A referral relationship is fully captured by two fields directly
+on `users` — the referee's `referredBy` (who referred them) and the
+referrer's own `referralCode` (their shareable code) — because the
+relationship is inherently 1:1-per-referee (a user is referred by at most
+one other user, ever) and never needs its own lifecycle beyond that single
+link; this is the same "1:1-with-user, always-fetched-together" reasoning
+already applied to `notificationPreferences`/`mobileVerification`/
+`photoVerification` above. There is therefore no `status`
+(`PENDING`/`REWARDED`) to track either — reward-granting happens
+synchronously, inline, at the moment a referred signup completes (see
+below), so there is no intermediate "referred but not yet rewarded" state
+that would need a status field to represent. "How many people has this user
+referred" (the original draft's implicit `referrerUserId` index use case) is
+answered on demand via `User.countDocuments({ referredBy: userId })` rather
+than a denormalized counter or a join through a separate collection — see
+the `users` section's `referredBy` index note.
+
+**Reward mechanism (chosen per the task spec — reuse Task #12's
+Subscription/Plan/entitlement system rather than inventing a new currency):**
+at implementation time, no "boost credits" or "priority likes" currency
+existed anywhere in the codebase yet (grepped the full `backend/` tree to
+confirm), so the documented safe default applies: on a successful referred
+signup, **both** the referrer and the brand-new referee are granted **7 days
+of `CG_PLUS`**, each via a new `Subscription` document with
+`paymentProvider: 'referral_reward'` (added to
+`backend/constants/subscriptionOptions.js#PAYMENT_PROVIDERS` alongside the
+existing `'mock_razorpay'`, so every `Subscription` row's origin stays
+traceable from one enum) and `expiresAt = now + 7 days`
+(`backend/utils/referralUtils.js#grantReferralReward()`). This is a genuinely
+real reward — a real, gated-by-`hasFeature()` `Subscription` row, not a mock —
+it just happens to be granted for free rather than following the (mock)
+Razorpay checkout path; see `docs/BUSINESS_PLAN.md`'s Referral program entry
+for the exact numbers and rationale. Granting a reward never touches or
+shortens any subscription the user may already have — it's simply an
+additional row, same "one document per checkout" pattern
+`backend/models/Subscription.js` already uses; `getEffectiveSubscription()`
+naturally resolves to whichever row expires furthest in the future.
+
+**Anti-abuse:** `referredBy` can be set at most once per user, enforced at
+the schema level via Mongoose's `immutable: true` (see the `users` section
+above) — not just app logic. There is no route anywhere in this codebase
+that can set/change `referredBy` after signup (`backend/routes/referrals.js`
+only implements `GET /me` — no `POST`/`PUT`/`PATCH` referral-linking route
+exists at all), so "retroactively apply a referral code after signup" isn't
+just blocked by the schema, there is structurally no code path that would
+even attempt it.
+
+**UX choice for an invalid/unknown referral code at signup (documented per
+the task spec's instruction to pick one and document it):** signup
+**always succeeds** even if the supplied `referralCode` is malformed or
+doesn't match any existing user — the code is simply not linked, and a
+warning is logged server-side (`backend/routes/auth.js`). This mirrors how
+real-world referral programs behave (a mistyped code shouldn't block account
+creation) over the stricter alternative of rejecting the whole signup with a
+`400`. See `docs/API_DOCUMENTATION.md`'s Authentication section for the
+exact behavior.
 
 ### `admin_users` (role field on `users`) — `[IMPLEMENTED, Task #11]`
 Roles are modeled as the `role` enum field directly on `users` (see above) rather than
@@ -655,10 +820,13 @@ Mongo's own connotations of "metadata").
 
 - All `ref users` foreign keys should use ObjectId references, not embedded documents,
   to keep the `users`/`profiles` split clean and avoid duplicating sensitive fields.
-- Geospatial fields (`profiles.location`, `events.location`, `safe_dates.location`) use
-  GeoJSON `Point` with a `2dsphere` index to support "near me" discovery without
-  hardcoding specific cities — this must work for any CG district/town, not just
-  Raipur/Bhilai/Durg/Bilaspur.
+- Geospatial fields (`profiles.location`, `events.location`) use GeoJSON `Point` with
+  a `2dsphere` index to support "near me" discovery without hardcoding specific
+  cities — this must work for any CG district/town, not just Raipur/Bhilai/Durg/
+  Bilaspur. **`safe_dates.location` is deliberately NOT geospatial** — it's free text
+  the user types themselves (an "approximate public location"), per Task #18's
+  explicit privacy requirement that this feature must never silently track exact
+  location — see the `safe_dates` section above.
 - Any new field that stores something sensitive (ID documents, exact address, private
   notes, internal scores) must be added to the `[NEVER EXPOSED]` list here and excluded
   from API serializers/DTOs at implementation time.

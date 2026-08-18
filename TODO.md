@@ -72,6 +72,40 @@ tracked below.
       registered for this project, so there is no verification that a user actually
       owns the handle they typed in; see `MOCK_FEATURES.md`'s entry and this file's
       V2 section ("real Instagram OAuth / ownership verification").
+- [x] **Why-You-Match + Smart Icebreakers (Task #15)** (2026-08-18) — deterministic,
+      heuristic profile-comparison scoring/generation, **not real AI**:
+      `backend/utils/compatibilityUtils.js` (`{ score, reasons }` from two `Profile`
+      documents), `backend/utils/icebreakerUtils.js` (3-6 template-filled conversation
+      starters), exposed via `GET /api/matches`'s new `compatibility` field plus the
+      dedicated `GET /api/matches/:matchId/compatibility` and
+      `GET /api/matches/:matchId/icebreakers`. Shown on the "It's a Match!" modal, the
+      Matches list (a "N% Match" badge — new `CompatibilityBadge` component), and the
+      Chat screen (badge in the header, a "Why you match" reasons strip, and an
+      icebreaker suggestion with "Use"/"Generate another" that prefills — never
+      auto-sends — the message box). **This project has no `ANTHROPIC_API_KEY`
+      configured** (see `backend/.env.example`), so neither feature calls a real LLM —
+      see `MOCK_FEATURES.md`'s entry (below in the V2 section) for the full explanation
+      and what a real upgrade would need. AI Profile Coach and AI Date Ideas remain
+      separate, not-yet-verified-by-this-entry V2 items (see the V2 list below and
+      `PROJECT_STATE.md`/`git log` for their current status).
+- [x] **Referral program / "Invite & Earn" (Task #17)** (2026-08-18) — every user gets
+      a unique 7-char referral code (`backend/models/User.js`'s `referralCode`,
+      generated at signup, `backend/routes/auth.js`); an optional `referralCode` in
+      the signup body links the new account's `referredBy` (schema-`immutable`,
+      settable once, ever) and grants **both** the referrer and referee 7 days of
+      `CG_PLUS` via a new `Subscription` row (`paymentProvider: 'referral_reward'`) —
+      reusing Task #12's Subscription/entitlement system rather than inventing a new
+      currency (neither "boost credits" nor "priority likes" existed in the codebase
+      at implementation time). An invalid/unknown code never blocks signup — it's
+      silently dropped (logged as a warning), which is the deliberately-chosen
+      more-user-friendly behavior, documented in `docs/DATABASE_SCHEMA.md`'s
+      `referrals` section. New `GET /api/referrals/me` (own code + shareable text +
+      referral count + recent rewards). Frontend: new
+      `frontend/src/pages/Referrals.jsx` ("Invite & Earn", linked from Settings) with
+      a copy-to-clipboard invite message, and an optional referral-code field on
+      `frontend/src/pages/Signup.jsx` (prefillable via a `?ref=<CODE>` query param).
+      **No real deep-link infrastructure** — the "shareable link" is just a copyable
+      code + templated text, see `MOCK_FEATURES.md`'s entry.
 
 ## MVP — Done
 
@@ -263,8 +297,12 @@ unchecked line means the whole feature is unbuilt).
 
 ## V2 (after MVP ships end-to-end)
 
-- [ ] AI compatibility explanations ("Why You Match") via Claude API
-- [ ] AI Smart Icebreakers
+- [x] AI compatibility explanations ("Why You Match") — **implemented 2026-08-18 (Task
+      #15) as a deterministic profile-comparison heuristic, NOT via the real Claude
+      API** (no `ANTHROPIC_API_KEY` configured in this project) — see the "Post-MVP
+      feature additions" entry above and `MOCK_FEATURES.md` for the full explanation.
+- [x] AI Smart Icebreakers — same divergence as above: **implemented 2026-08-18 (Task
+      #15) as deterministic, template-based generation, NOT via the real Claude API.**
 - [ ] AI Profile Coach suggestions
 - [ ] AI Date Ideas
 - [ ] Safe Date mode (safety timer, check-in, trusted contact)
@@ -273,7 +311,11 @@ unchecked line means the whole feature is unbuilt).
 - [ ] Advanced filters
 - [ ] Profile Boost
 - [ ] Priority Like
-- [ ] Referral program (Invite & Earn)
+- [x] Referral program (Invite & Earn) — **implemented 2026-08-18 (Task #17)** — see
+      the "Post-MVP feature additions" entry above. Reward is 7 days of `CG_PLUS` via
+      the existing Subscription/entitlement system, not a new currency — no boost
+      credits or priority-like currency existed in the codebase yet at
+      implementation time.
 - [ ] Real Razorpay payment integration (replace MOCK)
 - [ ] Voice call / video call in chat
 - [ ] Real Instagram OAuth / "Login with Instagram" verification — replaces the

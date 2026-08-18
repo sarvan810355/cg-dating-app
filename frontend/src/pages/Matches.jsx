@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import * as api from '../api';
 import Avatar from '../components/Avatar';
 import Button from '../components/Button';
+import CompatibilityBadge from '../components/CompatibilityBadge';
 import NotificationBell from '../components/NotificationBell';
 import VerificationBadge from '../components/VerificationBadge';
 
@@ -92,10 +93,20 @@ function Matches() {
                       {[m.otherUser.city, m.otherUser.district].filter(Boolean).join(', ') ||
                         'Matched'}
                     </p>
-                    {(m.otherUser.mobileVerified || m.otherUser.photoVerified) && (
+                    {(m.otherUser.mobileVerified ||
+                      m.otherUser.photoVerified ||
+                      m.compatibility?.score > 0) && (
                       <div className="mt-1 flex flex-wrap gap-1">
                         {m.otherUser.mobileVerified && <VerificationBadge type="mobile" />}
                         {m.otherUser.photoVerified && <VerificationBadge type="photo" />}
+                        {/* Task #15 — Smart Icebreakers + Why-You-Match
+                            (V2, user-requested): a deterministic,
+                            heuristic-based score, not real AI — see
+                            MOCK_FEATURES.md. Only shown once there's a
+                            genuine (>0) score to report. */}
+                        {m.compatibility?.score > 0 && (
+                          <CompatibilityBadge score={m.compatibility.score} />
+                        )}
                       </div>
                     )}
                   </div>

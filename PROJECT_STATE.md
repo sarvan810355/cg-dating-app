@@ -1,28 +1,83 @@
 Project: CG-Dating-App
 Current Phase: MVP (Phases 0-10 per docs/ROADMAP.md) is **complete**. Task #6 (Final
 polish, security audit, documentation wrap-up) closed out the last of the 12 internal
-tasks that made up the MVP build. Since then, one post-MVP feature was added by
-explicit user request: Instagram profile linking (self-reported handle, not OAuth —
-see "Current Task" below and MOCK_FEATURES.md). Phases 13/14/15 (Testing, full
-Security Hardening, Deployment) remain cross-cutting work not yet started — see
-"Remaining Features" below and docs/ROADMAP.md.
-Current Task: **Post-MVP feature addition (not one of the original 12 tasks):
-Instagram profile linking**, added 2026-08-18 by explicit user request after the MVP
-had already shipped. Self-reported `instagramHandle` field on Profile — **not real
-Instagram OAuth** (no Meta Developer app registered for this project, same
-mocked-external-integration pattern as SMS/OTP, Cloudinary, Razorpay, FCM). Backend:
-`backend/models/Profile.js` (new nullable field + schema-level format validator),
-`backend/routes/profile.js` (extended the existing `PUT /api/profile/me` partial-merge
-body, no new endpoint), `backend/utils/profileSerializers.js` (included in both the
-own- and public-profile serializers — also surfaces on the discovery feed, which
-reuses the public serializer directly), `backend/utils/profileUtils.js` (+5 bonus to
-`profileCompletionPercentage` when filled, never required). Frontend:
-`frontend/src/pages/ProfileBuilder.jsx` (new "Social" section, client-side validation
-mirroring the backend regex), `frontend/src/pages/Discovery.jsx` (a small `📷 @handle`
-badge linking out to Instagram, `target="_blank"`/`rel="noopener noreferrer"` — the
-only existing "view someone else's public profile" surface in this codebase). See
+tasks that made up the MVP build. Since then, post-MVP V2 features have been added by
+explicit user request: Instagram profile linking (self-reported handle, not OAuth),
+Why-You-Match + Smart Icebreakers (Task #15, deterministic heuristics, not real AI),
+and a Referral program / "Invite & Earn" (Task #17 — see "Current Task" below and
+MOCK_FEATURES.md). Other V2 work (Safe Date/Date Planner, Boost/Priority Like, etc.)
+may be in progress concurrently on this branch — check `git log` for the true current
+state rather than trusting this narrative alone.
+Phases 13/14/15 (Testing, full Security Hardening, Deployment) remain cross-cutting
+work not yet started — see "Remaining Features" below and docs/ROADMAP.md.
+Current Task: **V2 feature, user-requested: Task #17 — Referral program ("Invite &
+Earn")**, added 2026-08-18. Every user gets a unique, human-shareable 7-character
+referral code (uppercase alphanumeric, excluding ambiguous `0`/`O`/`1`/`I`) generated
+at signup time (`backend/utils/referralUtils.js#generateUniqueReferralCode()` —
+pre-checked uniqueness with retry-on-collision, the schema's own `unique` index as
+the final guard). `POST /api/auth/signup` (`backend/routes/auth.js`) accepts an
+optional `referralCode` in the body: a valid, existing code links the new user's
+`referredBy` (ref `User`, `backend/models/User.js`, `immutable: true` — schema-level,
+settable exactly once, ever) to the code owner, and **synchronously grants both sides
+a reward** — 7 days of `CG_PLUS` each, via a new `Subscription` document
+(`paymentProvider: 'referral_reward'`, added to `PAYMENT_PROVIDERS` in
+`backend/constants/subscriptionOptions.js`) — reusing Task #12's existing
+Subscription/Plan/`hasFeature()` entitlement system rather than inventing a new
+currency (grepped the codebase at implementation time: neither "boost credits" nor
+"priority likes" existed yet, so this was the documented safe default; see
+`backend/utils/referralUtils.js#grantReferralReward()`/`grantMutualReferralReward()`).
+**Documented UX choice:** an invalid-format or unknown/typo'd code never rejects the
+signup — the account is still created (`201`), just without a referral link, only
+logged as a warning server-side — the more user-friendly of the two options the task
+spec offered, matching how real referral programs behave. New `GET /api/referrals/me`
+(`backend/routes/referrals.js`) returns the caller's own code, a shareable invite
+string (`"Join CG Dating with my code: <CODE>"` — no real deep-link infra, see
+MOCK_FEATURES.md), their referral count (`User.countDocuments({ referredBy })`, not a
+denormalized counter), and their latest few reward grants. No route anywhere can
+retroactively link/relink a referral after signup (only `GET /me` exists on this
+router; `referredBy`'s `immutable` schema constraint is the second, independent
+guard). Frontend: new `frontend/src/pages/Referrals.jsx` ("Invite & Earn" — code
+display, copy-to-clipboard invite text, referral count, recent rewards list), linked
+from `frontend/src/pages/Settings.jsx`; `frontend/src/pages/Signup.jsx` gained an
+optional "Referral code" field (prefillable from a `?ref=<CODE>` query param);
+`frontend/src/context/AuthContext.jsx#signup()` and `frontend/src/api.js#signup()`
+both extended additively (new optional trailing `referralCode` param). Concurrency
+note: this task was built alongside Task #15 (Icebreakers, touching Match/matches.js)
+and Task #18 (Safe Date/Date Planner, new files) on the same branch — this task's own
+changes were scoped to `User.js`/`auth.js` plus new files, kept additive, and rebased
+onto both other tasks' work before the final push (see `git log` for the merge). See
 `IMPLEMENTATION_PROGRESS.md`'s newest entry for the full verification detail.
-Before this, Task #6 — Final polish, security/performance audit, documentation
+Before this, Task #15 — Smart Icebreakers + Why-You-Match, added 2026-08-18. Two
+deterministic, heuristic-based features — this project has no `ANTHROPIC_API_KEY`
+configured anywhere (see `backend/.env.example` — only
+`PORT`/`MONGODB_URI`/`JWT_SECRET` exist), so neither calls a real LLM; both compare
+the two participants' actual `Profile` documents and fill fixed templates. Backend:
+`backend/utils/compatibilityUtils.js` (new — `computeCompatibility(profileA,
+profileB)` returns `{ score: 0-100, reasons: string[] (0-5) }`), `backend/utils/
+icebreakerUtils.js` (new — `generateIcebreakers(profileA, profileB)` returns a pool
+of 3-6 template-filled conversation starters), `backend/routes/matches.js` (each row
+of `GET /api/matches` now includes a `compatibility` field; new
+`GET /api/matches/:matchId/compatibility` and `GET /api/matches/:matchId/
+icebreakers`). Frontend: `frontend/src/components/CompatibilityBadge.jsx` (new),
+`frontend/src/components/MatchModal.jsx`, `frontend/src/pages/Matches.jsx`,
+`frontend/src/pages/Chat.jsx`, `frontend/src/api.js` (new
+`getMatchCompatibility()`/`getMatchIcebreakers()`). See `IMPLEMENTATION_PROGRESS.md`
+for the full detail on this earlier entry.
+Before that, post-MVP feature addition: Instagram profile linking, added 2026-08-18 by
+explicit user request after the MVP had already shipped. Self-reported
+`instagramHandle` field on Profile — **not real Instagram OAuth** (no Meta Developer
+app registered for this project, same mocked-external-integration pattern as SMS/OTP,
+Cloudinary, Razorpay, FCM). Backend: `backend/models/Profile.js` (new nullable field +
+schema-level format validator), `backend/routes/profile.js` (extended the existing
+`PUT /api/profile/me` partial-merge body, no new endpoint), `backend/utils/
+profileSerializers.js` (included in both the own- and public-profile serializers —
+also surfaces on the discovery feed, which reuses the public serializer directly),
+`backend/utils/profileUtils.js` (+5 bonus to `profileCompletionPercentage` when
+filled, never required). Frontend: `frontend/src/pages/ProfileBuilder.jsx` (new
+"Social" section, client-side validation mirroring the backend regex),
+`frontend/src/pages/Discovery.jsx` (a small `📷 @handle` badge linking out to
+Instagram, `target="_blank"`/`rel="noopener noreferrer"`).
+Before that, Task #6 — Final polish, security/performance audit, documentation
 wrap-up (the last of the original MVP build). Scope actually covered: (1) full
 build/lint/boot verification pass across frontend and backend; (2) a security audit
 against docs/ARCHITECTURE.md's security requirements and docs/TESTING_STRATEGY.md's
@@ -70,10 +125,15 @@ Features In Progress: None — the MVP (Phases 0-10) is complete. Next work is e
 feature scope or the cross-cutting Phases 13-15 (Testing, full Security Hardening,
 Deployment) — see "Next Exact Task" below.
 Remaining Features (all deliberately out of MVP scope, not gaps in this pass): AI
-features (Why-You-Match, Smart Icebreakers, Profile Coach, Date Ideas — V2, Claude API),
-Safe Date mode, Date Planner, Private/Invisible browsing, advanced filters, Profile
-Boost, Priority Like, Referral program, real Razorpay integration, voice/video calling
-(all V2); CG Connect/Events, advanced Trust Engine, ML recommendations, advanced admin
+Profile Coach and AI Date Ideas (V2, would need a real Claude API integration — see
+MOCK_FEATURES.md; Why-You-Match and Smart Icebreakers are now implemented as
+deterministic heuristics instead — see "Current Task" above), Private/Invisible
+browsing, advanced filters, Profile Boost, Priority Like, real Razorpay integration,
+voice/video calling (all V2 — Referral program is now implemented, see "Current Task"
+above; Safe Date mode and Date Planner may also be implemented or in progress
+concurrently on this branch by now; check `git log` rather than trusting this line);
+CG Connect/Events, advanced Trust Engine, ML
+recommendations, advanced admin
 analytics, statewide/national expansion, city-scale SEO pages, Capacitor native wrapper
 (all V3). Also still deferred within already-shipped MVP features (unchanged from
 before this pass, see TODO.md for the full list): a persisted `preferences` collection
@@ -100,7 +160,55 @@ filtering yet. Chat is text-only. Report evidence is plain strings, no file uplo
 automated test suite exists in either backend/ or frontend/ (see
 docs/TESTING_STRATEGY.md). BUG-001 (rate limiting/security headers beyond auth) is
 newly tracked in this pass — see above.
-Last Successful Test (Instagram linking, this pass): Backend — `node -e
+Last Successful Test (Task #17 — Referral program, this pass): Backend —
+`node -e "require('./server.js')"` boots cleanly (both alone and alongside Task #18's
+concurrently-added `safeDates`/`dateIdeas` routers already present on the shared
+`server.js`), no import/syntax errors; `GET /api/health` 200; `curl` with no
+`Authorization` header on `GET /api/referrals/me` returned 401. A standalone Node
+script (`backend/__verify_referrals_tmp.js`, run from inside `backend/` so
+`node_modules` resolved, deleted before commit per this project's established
+convention) did two things without any live DB connection: (1) loaded the REAL
+`backend/models/User.js` Mongoose schema directly and proved `referredBy`'s
+`immutable: true` constraint actually blocks reassignment (both plain-property
+assignment and `.set()`) once a document is no longer new, while still allowing the
+initial set on a brand-new document, and confirmed the schema declares `unique: true`
+on `referralCode`; (2) hijacked `require.cache` for `models/User.js`/`Plan.js`/
+`Subscription.js` with fake in-memory stores and mounted the REAL
+`backend/routes/auth.js` + `backend/routes/referrals.js` over real HTTP (same
+fake-model-over-real-route pattern already used in this project's Task #6 security
+verification) to exercise the full flow end-to-end: a referrer signup with no code
+gets a 7-char code and `referredBy: null`; a referee signup with that valid code
+succeeds, links `referredBy` to the referrer, and creates exactly 2 new
+`Subscription` rows (`paymentProvider: 'referral_reward'`, `CG_PLUS`, ~7-day
+`expiresAt`) — one per side; a malformed code (`"nope!!"`) and a well-formed-but-
+unknown code (`"ZZZZZZZ"`) both still let signup succeed with no referral link and no
+reward rows created; `GET /api/referrals/me` for the referrer returned the correct
+code, a `shareText` containing it, `referralCount: 1`, and exactly 1 reward entry
+(`planCode: 'CG_PLUS'`); the same route without a token returned 401. All 26 checks
+passed. Frontend — `npm run build` clean (no errors); `npm run lint` (oxlint) — 0
+errors, the same 2 pre-existing `only-export-components` warnings carried forward, no
+new warnings.
+Last Successful Test (Task #15 — Why-You-Match + Smart Icebreakers, prior pass):
+Backend — the already-running dev server (`nodemon`) picked up the new route file
+changes cleanly (no crash/restart-loop); `GET /api/health` 200; `curl` with no
+`Authorization` header on `GET /api/matches`, `GET /api/matches/:matchId/compatibility`,
+and `GET /api/matches/:matchId/icebreakers` all returned 401 as expected. A standalone
+Node script (`backend/_verify_task15.js`, deleted before commit per this project's
+established convention) exercised `computeCompatibility()` and `generateIcebreakers()`
+directly with realistic fake `Profile` objects, no DB connection needed: identical
+profiles scored 100 with 5 reasons covering every category (intention/city/interests/
+language/lifestyle/prompts); fully disjoint profiles scored exactly 0 with an empty
+`reasons` array (no fabricated reasons) and an icebreaker pool drawn entirely from the
+generic fallback list (never "Hi"/"Hello"); a partial-overlap case correctly omitted
+the dating-intention reason once that field was made to differ, and correctly capped
+the interest-list reason at 3 shared interests, joined naturally ("A, B and C"); a
+missing/null profile on either side never threw, returning a neutral zero-score/empty
+result for compatibility and the generic fallback pool for icebreakers; icebreaker
+pools were confirmed duplicate-free and always within the documented 3-6 size range.
+All checks passed — see IMPLEMENTATION_PROGRESS.md's newest entry for the full detail.
+Frontend — `npm run build` clean; `npm run lint` (oxlint) — 0 errors, same 2
+pre-existing warnings carried forward (unrelated to this change).
+Last Successful Test (Instagram linking, prior pass): Backend — `node -e
 "require('./server.js')"` boots cleanly, no import/syntax errors; `GET /api/health`
 200; `curl -X PUT /api/profile/me` with no `Authorization` header still returns 401.
 A standalone Node script (deleted before commit, per this project's established
@@ -148,7 +256,33 @@ empty states confirmed present on Discovery, Matches, Chat, NotificationBell, an
 four Admin screens (all funnel through `frontend/src/api.js`'s single `request()`
 helper, which attaches `.status`/`.data` to thrown errors consistently) — no changes
 needed.
-Last Modified Files (Instagram linking, this pass): backend/constants/
+Last Modified Files (Task #17 — Referral program, this pass): backend/constants/
+referralOptions.js (new), backend/utils/referralUtils.js (new), backend/routes/
+referrals.js (new), backend/models/User.js (new referralCode/referredBy fields +
+indexes), backend/routes/auth.js (signup accepts optional referralCode, generates a
+code for every new user, links + rewards on a valid code), backend/constants/
+subscriptionOptions.js (added 'referral_reward' to PAYMENT_PROVIDERS), backend/
+server.js (mounted referralsRouter), frontend/src/api.js (signup() gained an optional
+referralCode param, new getMyReferrals()), frontend/src/context/AuthContext.jsx
+(signup() passes referralCode through), frontend/src/pages/Signup.jsx (optional
+referral code field, prefillable from ?ref=), frontend/src/pages/Referrals.jsx (new —
+"Invite & Earn" page), frontend/src/pages/Settings.jsx (new "Invite & Earn" link),
+frontend/src/App.jsx (new /referrals route), docs/DATABASE_SCHEMA.md,
+docs/API_DOCUMENTATION.md, docs/BUSINESS_PLAN.md, MOCK_FEATURES.md, TODO.md, this
+file, IMPLEMENTATION_PROGRESS.md.
+Last Modified Files (Task #15 — Why-You-Match + Smart Icebreakers, prior pass):
+backend/utils/compatibilityUtils.js (new), backend/utils/icebreakerUtils.js (new),
+backend/routes/matches.js (compatibility field on GET /api/matches, new
+GET /:matchId/compatibility + GET /:matchId/icebreakers routes),
+frontend/src/components/CompatibilityBadge.jsx (new),
+frontend/src/components/MatchModal.jsx (fetches + shows compatibility/icebreaker),
+frontend/src/pages/Matches.jsx (compatibility badge per match card),
+frontend/src/pages/Chat.jsx (compatibility badge, "Why you match" reasons strip,
+icebreaker suggestion bar with Use/Generate another), frontend/src/api.js (new
+getMatchCompatibility/getMatchIcebreakers), docs/DATABASE_SCHEMA.md,
+docs/API_DOCUMENTATION.md, docs/ROADMAP.md, MOCK_FEATURES.md, TODO.md, this file,
+IMPLEMENTATION_PROGRESS.md.
+Last Modified Files (Instagram linking, prior pass): backend/constants/
 profileOptions.js (new INSTAGRAM_HANDLE_REGEX), backend/models/Profile.js (new
 instagramHandle field + validator), backend/routes/profile.js (PUT /me accepts
 instagramHandle), backend/utils/profileSerializers.js (both serializers include it),
@@ -166,29 +300,43 @@ package-lock.json (bcrypt 5.1.1 → 6.0.0, express-rate-limit added), docs/
 SECURITY_AUDIT.md (new), BUGS.md (BUG-001 added), PROJECT_STATE.md (this file),
 IMPLEMENTATION_PROGRESS.md, TODO.md, MOCK_FEATURES.md, README.md, docs/ROADMAP.md (all
 updated to reflect final MVP-complete state — see git log for the exact diff).
-Database Status: Profile gained a new `instagramHandle` field (post-MVP, self-reported
-Instagram linking — see "Current Task" above); otherwise unchanged. MongoDB/Mongoose
-schemas implemented for User, Profile, Like, Match,
+Database Status: `User` gained `referralCode` (unique, sparse) and `referredBy`
+(nullable ref, `immutable`) fields this pass (Task #17 — Referral program); `Profile`
+gained `instagramHandle` in a prior pass. MongoDB/Mongoose schemas implemented for
+User, Profile, Like, Match,
 Message, Notification, Block, Report, Plan, Subscription, and AuditLog; no live DB
 connection has ever been verified in any sandbox session across this entire project —
 this remains the top technical-debt item (see "Known Technical Debt" and TODO.md's
 "Before real production launch" section).
 Backend Status: Express + Socket.IO server (same HTTP server) running with auth +
 profile + discovery + matches + notifications + verification + reports + blocks +
-subscription + admin routes — all from prior passes, unchanged in behavior this pass
-except: `POST /api/auth/login`/`signup` now rate limited, `User.password` now
-`select: false`. Boots cleanly; `GET /api/health` confirmed live.
+subscription + referrals + admin routes (plus whatever Task #18 has added
+concurrently — check `git log`). This pass added `GET /api/referrals/me` and
+extended `POST /api/auth/signup` with an optional `referralCode` body field; every
+other route unchanged in behavior. Boots cleanly; `GET /api/health` confirmed live.
 Frontend Status: All screens from every prior pass unchanged this pass (consistency
 spot-check found nothing requiring a fix — dark mode tokens and loading/error/empty
 states already solid throughout). `npm run build`/`npm run lint` both clean.
 Authentication Status: Implemented (signup/login/JWT/me endpoint), now with rate
 limiting on both signup and login and the password hash never selected by default —
 unchanged otherwise.
-AI Status: Not started (planned: Claude API, backend-only — V2 scope, see
-docs/ROADMAP.md Phase 11).
+AI Status: **Why-You-Match and Smart Icebreakers implemented this pass (Task #15)** —
+`backend/utils/compatibilityUtils.js` / `backend/utils/icebreakerUtils.js`, exposed via
+`GET /api/matches` (`compatibility` field) and `GET /api/matches/:matchId/
+compatibility` / `.../icebreakers`. **Not a real Claude API integration** — no
+`ANTHROPIC_API_KEY` is configured anywhere in this project (see
+`backend/.env.example`), so both are deterministic, server-side profile-comparison
+heuristics instead; see MOCK_FEATURES.md for the full explanation and what a real
+upgrade would need. AI Profile Coach and AI Date Ideas remain not started by this
+session (see docs/ROADMAP.md Phase 11) — Date Ideas may have separate work in
+progress elsewhere on this branch concurrently; check `git log` for its true status.
 Payment Status: Subscription scaffolding implemented — MOCK checkout, not real
 Razorpay yet (unchanged this pass; still explicitly not production-ready as-is, see
-MOCK_FEATURES.md).
+MOCK_FEATURES.md). This pass added a second, non-payment way a `Subscription` row can
+be created: the Task #17 referral reward (`paymentProvider: 'referral_reward'`,
+7 days of `CG_PLUS`, granted for free on a successful referred signup) — a real
+`Subscription` row gated by the same real `hasFeature()` entitlement check as a paid
+plan, just not itself a payment.
 Admin Status: Implemented — role/accountStatus on User, role-gated /api/admin/* routes
 (dashboard, reports queue, photo-verification queue, suspend/reinstate, SUPER_ADMIN-only
 role change), AuditLog on every mutation, role-gated /admin frontend section (unchanged
@@ -202,12 +350,21 @@ launch" section for the concrete list (live MongoDB Atlas connection + testing, 
 Cloudinary/Firebase/Razorpay/SMS provider credentials, real `.env` production secrets,
 a seeded real `SUPER_ADMIN` account, an automated test suite per
 docs/TESTING_STRATEGY.md, a unique index on `User.phone`, HTTPS/hosting setup per
-docs/ARCHITECTURE.md's Phase 15, and closing BUG-001). The next phase of work, once
-someone decides to pick it up, is **V2 features** (AI compatibility explanations, Smart
-Icebreakers, Profile Coach, Date Ideas, Safe Date mode, Date Planner, Profile Boost,
-Referral program, real Razorpay integration — see docs/ROADMAP.md's V2 section) — not
-started, and should not start until the "Before real production launch" gaps above are
-closed on a real environment with a live database, per this project's own MVP-first
+docs/ARCHITECTURE.md's Phase 15, and closing BUG-001). Despite that standing caveat,
+the user has explicitly requested V2 feature work directly (Instagram linking, Task
+#15 — Why-You-Match + Smart Icebreakers, and now Task #17 — Referral program), so V2
+work is actively happening on this branch by explicit request, ahead of the
+MVP-first sequencing principle's default recommendation below. Remaining V2 scope not
+yet done by this session: AI Profile Coach, AI Date Ideas (both would need a real
+Claude API integration — see MOCK_FEATURES.md), Private/Invisible browsing, advanced
+filters, Profile Boost, Priority Like, real Razorpay integration, voice/video calling
+— see docs/ROADMAP.md's V2 section. **No TaskList tool was available in this session
+to check the live task graph before writing this** — Safe Date mode and Date Planner
+(Task #18) may already be done or in progress by concurrent work on this branch;
+check `git log` and any TaskList tooling available to whoever picks this up next for
+the authoritative current state rather than trusting this line alone. Absent a
+specific next user-requested V2 item, the "Before real production launch" gaps above
+remain the recommended default next focus, per this project's own MVP-first
 sequencing principle (docs/ROADMAP.md's "Notes on sequencing").
 Next Recommended Action: Get a real MongoDB connection (Atlas free tier is enough)
 verified in whatever environment picks this project up next — every DB-dependent

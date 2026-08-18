@@ -10,6 +10,257 @@ next task that follows from it.
 
 ---
 
+## 2026-08-18 — Referral program / "Invite & Earn" (Task #17, V2, user-requested)
+
+- **Phase:** V2 (docs/ROADMAP.md's V2 section — "Referral program (Invite & Earn)"),
+  explicit user request. Not one of the original 12 MVP tasks. Built concurrently on
+  this branch alongside Task #15 (Icebreakers/Why-You-Match, touching `Match`/
+  `matches.js`) and Task #18 (Safe Date + Date Planner, new files) — this task's own
+  changes were kept scoped and additive to `User.js`/`auth.js` specifically to
+  minimize rebase friction, per the concurrency instructions for this pass.
+- **Task:** Every user gets a unique, short, human-shareable referral code at signup.
+  An optional `referralCode` in the signup body links a new account to its referrer
+  (once, ever) and rewards both sides. Reward mechanism reuses Task #12's existing
+  Subscription/Plan/entitlement system rather than inventing a new currency — grepped
+  the full `backend/` tree at implementation time and confirmed neither a "boost
+  credits" nor a "priority likes" currency existed yet (Task #16 — Boost/Priority
+  Like — had not landed), so the documented safe default applies: **7 days of
+  `CG_PLUS`**, granted to both the referrer and the referee via a new `Subscription`
+  document each.
+- **Referral code generation:** `backend/utils/referralUtils.js#generateReferralCode()`
+  draws 7 characters from an alphabet that deliberately excludes visually-ambiguous
+  characters (`0`/`O`, `1`/`I` — see `backend/constants/referralOptions.js`), using
+  `crypto.randomInt` (not `Math.random`, same reasoning already applied to OTP
+  generation). `generateUniqueReferralCode()` pre-checks uniqueness against `User`
+  with retry-on-collision (astronomically unlikely to ever loop — the code space is
+  ~34 billion); `backend/models/User.js`'s schema-level `unique: true` index on
+  `referralCode` is the final race-safe guard, and `backend/routes/auth.js`'s signup
+  handler retries the whole `User.create()` call (regenerating a fresh code) on the
+  rare genuine duplicate-key race.
+- **`referredBy` — schema-enforced, one-time-ever link:** `backend/models/User.js`
+  gained `referredBy` (nullable ref `User`, `immutable: true`). Mongoose's
+  `immutable` allows the initial set on a brand-new document (at signup) but silently
+  ignores any later reassignment on an already-saved document — verified directly
+  against the real schema in the standalone test below. No route anywhere in this
+  codebase can set/change `referredBy` after signup (`backend/routes/referrals.js`
+  only implements a read-only `GET /me`), so retroactive referral-linking is
+  structurally impossible, not just schema-blocked.
+- **Signup flow (`backend/routes/auth.js`):** accepts an optional `referralCode` in
+  the `POST /api/auth/signup` body. **Documented UX choice (per the task's explicit
+  instruction to pick one and document it):** an invalid-format or unknown/typo'd
+  code never rejects the signup — it's silently dropped (from the caller's
+  perspective) and only logged as a warning server-side; the account is still
+  created normally. This was chosen over the stricter "reject with 400" alternative
+  because it matches how real-world referral programs behave (a mistyped code
+  shouldn't block someone from creating an account) and was the task's own
+  explicitly-preferred option. "Can't refer yourself" needs no separate check — the
+  referrer must already have an account (and therefore an existing code) for their
+  code to resolve to anyone, so a brand-new signup's own code doesn't exist yet at
+  the moment the request body is checked.
+- **Reward granting (`backend/utils/referralUtils.js`):**
+  `grantReferralReward(userId)` looks up the (idempotently-seeded) `CG_PLUS` `Plan`
+  and creates a new `Subscription` (`status: 'ACTIVE'`, `expiresAt: now + 7 days`,
+  `paymentProvider: 'referral_reward'` — added to
+  `backend/constants/subscriptionOptions.js#PAYMENT_PROVIDERS` alongside the existing
+  `'mock_razorpay'` so every `Subscription` row's origin stays traceable from one
+  enum). `grantMutualReferralReward()` grants both sides, each isolated in its own
+  try/catch (same "isolate side-effect from the main success path" pattern already
+  used by `notificationUtils.js`'s callers) — awaited synchronously in the signup
+  handler (not fire-and-forget) so the reward is reliably granted before the
+  response is sent, but a grant failure on either side never turns a successful
+  signup into an error response. Granting never touches/shortens any subscription a
+  user may already have — it's simply a new `Subscription` row, same "one document
+  per checkout" pattern the model already uses;
+  `entitlementUtils.js#getEffectiveSubscription()` naturally resolves to whichever
+  row expires furthest out.
+- **New route:** `GET /api/referrals/me` (`backend/routes/referrals.js`, auth
+  required) — the caller's own `referralCode`, a `shareText` string (no real
+  deep-link infra, just a copyable code + templated message — see
+  `MOCK_FEATURES.md`), `referralCount` (`User.countDocuments({ referredBy: callerId
+  })` — computed on demand, not a denormalized counter, avoiding counter-drift bugs),
+  and the caller's own most recent reward grants (capped at 5).
+- **Frontend:** `frontend/src/api.js` gained `signup(email, password, referralCode)`
+  (additive optional 3rd param) and `getMyReferrals()`. `frontend/src/context/
+  AuthContext.jsx#signup()` passes the referral code through unchanged otherwise.
+  `frontend/src/pages/Signup.jsx` gained an optional "Referral code" text input,
+  upper-cased as typed, prefillable from a `?ref=<CODE>` query param on `/signup`
+  (via `useSearchParams`) so a shared `/signup?ref=CODE` link auto-fills the field.
+  New `frontend/src/pages/Referrals.jsx` ("Invite & Earn" — code display, a
+  copy-to-clipboard button for the invite text using `navigator.clipboard` with a
+  graceful on-screen fallback if unavailable, referral count, and a recent-rewards
+  list), routed at `/referrals` in `frontend/src/App.jsx` and linked from
+  `frontend/src/pages/Settings.jsx`.
+- **Tests performed:** Backend — `node -e "require('./server.js')"` boots cleanly
+  (including alongside Task #18's concurrently-added `safeDates`/`dateIdeas`
+  routers), no import/syntax errors; `GET /api/health` 200; `curl` with no
+  `Authorization` header on `GET /api/referrals/me` returned 401; `POST
+  /api/auth/signup` with a missing body still returns its existing 400 (unaffected
+  by the additive `referralCode` param). A standalone Node script
+  (`backend/__verify_referrals_tmp.js`, run from inside `backend/` so its
+  `node_modules` resolved correctly, deleted before this commit per this project's
+  established "verify with throwaway scripts, never commit them" convention) did two
+  things without any live MongoDB connection: **(1)** loaded the REAL
+  `backend/models/User.js` Mongoose schema directly (no DB) and constructed real
+  `mongoose.Document` instances to prove `referredBy`'s `immutable: true` constraint
+  actually works — the initial set on a brand-new document succeeds, but both a
+  plain-property reassignment (`doc.referredBy = ...`) and `.set('referredBy', ...)`
+  are silently ignored once `doc.isNew` is `false` (simulating an already-saved
+  document, exactly what a real second `.save()` would see), including for a
+  never-referred (`null`) user who can't be retroactively linked either; also
+  confirmed the schema declares `unique: true` on `referralCode`. **(2)** hijacked
+  `require.cache` for `models/User.js`/`Plan.js`/`Subscription.js` with hand-built
+  fake in-memory stores (supporting the exact chainable query methods the real code
+  calls — `.select()`, `.sort()`, `.limit()`, `.populate()`, plus `exists`/
+  `countDocuments`/`create` with simulated unique-constraint duplicate-key errors)
+  and mounted the REAL `backend/routes/auth.js` + `backend/routes/referrals.js` over
+  real HTTP (same fake-model-over-real-route-over-real-HTTP pattern already
+  established in this project's Task #6 security-audit verification script) to
+  exercise the full flow end-to-end: a referrer signup with no code gets a
+  7-character `referralCode` and `referredBy: null`; a referee signup using that
+  valid code succeeds, links `referredBy` to the referrer's id, and creates exactly
+  2 new `Subscription` rows — one per side, both `paymentProvider: 'referral_reward'`,
+  both for the `CG_PLUS` plan, both expiring ~7.00 days after `startedAt`; a
+  malformed code (`"nope!!"`, fails the format regex) and a well-formed-but-unknown
+  code (`"ZZZZZZZ"`) both still let signup succeed (`201`) with `referredBy: null`
+  and zero new reward rows created; `GET /api/referrals/me` for the referrer
+  returned the correct `referralCode`, a `shareText` containing it, `referralCount:
+  1` (only the one valid-code referee counts — the two rejected-code signups don't),
+  and exactly 1 reward entry with `planCode: 'CG_PLUS'`; the same route without a
+  token returned 401. All 26 checks passed. Frontend — `npm run build` clean (no
+  errors, `dist/` produced); `npm run lint` (oxlint) — 0 errors, the same 2
+  pre-existing `only-export-components` warnings on `AuthContext.jsx`/
+  `NotificationContext.jsx` carried forward, no new warnings.
+- **Rebase:** `git pull --rebase origin claude/new-dating-app-repo-r8al13` was run
+  before the final push; see this entry's own commit message / `git log` for whether
+  a rebase actually occurred and what, if anything, needed resolving (both other
+  concurrent tasks' files — `Match`/`matches.js` for Task #15, and Task #18's new
+  files — were left untouched by this task's own changes, so no overlapping-hunk
+  conflicts were expected on `User.js`/`auth.js` specifically).
+- **Files touched:** `backend/constants/referralOptions.js` (new),
+  `backend/utils/referralUtils.js` (new), `backend/routes/referrals.js` (new),
+  `backend/models/User.js`, `backend/routes/auth.js`,
+  `backend/constants/subscriptionOptions.js`, `backend/server.js`,
+  `frontend/src/api.js`, `frontend/src/context/AuthContext.jsx`,
+  `frontend/src/pages/Signup.jsx`, `frontend/src/pages/Referrals.jsx` (new),
+  `frontend/src/pages/Settings.jsx`, `frontend/src/App.jsx`,
+  `docs/DATABASE_SCHEMA.md`, `docs/API_DOCUMENTATION.md`, `docs/BUSINESS_PLAN.md`,
+  `MOCK_FEATURES.md`, `TODO.md`, `PROJECT_STATE.md`, this file.
+- **Next task:** No specific next V2 item was requested alongside this one. Per this
+  project's own MVP-first sequencing principle, the "Before real production launch"
+  gaps in `TODO.md` remain the recommended default next focus absent a further
+  explicit user request; concurrently, Task #15 and Task #18 may still be finishing
+  up on this same branch — check `git log`/any TaskList tooling for the current
+  state before picking up new work.
+
+---
+
+## 2026-08-18 — Why-You-Match + Smart Icebreakers (Task #15, V2, user-requested)
+
+- **Phase:** V2 (docs/ROADMAP.md Phase 11 — AI Features), pulled forward by explicit
+  user request ahead of Phases 13-15. Not one of the original 12 MVP tasks.
+- **Task:** Add two deterministic, heuristic-based "AI-sounding" features — this
+  project has no `ANTHROPIC_API_KEY` configured anywhere (checked `backend/
+  .env.example`: only `PORT`/`MONGODB_URI`/`JWT_SECRET` exist), so no code path in this
+  build ever calls the real Claude API or any other LLM. **Why-You-Match**: a
+  compatibility score + short human-readable reasons between two users' profiles.
+  **Smart Icebreakers**: personalized conversation-starter suggestions. Both are pure,
+  server-side profile-comparison heuristics with a fixed, documented weighting/template
+  set, matching the same "mock what can't be real given no credentials" pattern already
+  used for every other external integration in this codebase (SMS/OTP, Cloudinary,
+  Razorpay, FCM — see `MOCK_FEATURES.md`).
+- **Backend:** `backend/utils/compatibilityUtils.js` (new) —
+  `computeCompatibility(profileA, profileB)` returns `{ score: 0-100, reasons: string[]
+  (0-5) }`. Weighting (documented in the file's top comment, since neither
+  `docs/BUSINESS_PLAN.md` nor `docs/DATABASE_SCHEMA.md` sketch a concrete "CG Match
+  Score" formula to reuse — defined fresh for this feature): same `datingIntention`
+  +25 (biggest single weight — two people wanting different things is the largest
+  real-world mismatch), same `city` +15 (local-first product per `docs/BUSINESS_PLAN.md`),
+  shared `interests` +8 each capped at 3 shared (+24 max), shared `languages` +10 flat
+  (not per-language), matching `lifestyle` fields (smoking/drinking/diet) +5 each
+  capped at 3 (+15 max), shared `personalityPrompts` themes +8 each capped at 2 (+16
+  max) — raw total caps at 105, clamped to 100 so an excellent-but-not-perfect match
+  can still read as a clean 100. Reasons are only ever built from genuine overlap
+  (never fabricated to pad the list to a target count), sorted by weight, capped at 5,
+  and read as plain-language observations ("You both love Travel, Cricket and Cooking",
+  "Same relationship goal: Serious dating", "Both in Raipur") — never clinical/
+  algorithmic-sounding output, and never a claim of scientific/psychological accuracy.
+  `backend/utils/icebreakerUtils.js` (new) — `generateIcebreakers(profileA, profileB)`
+  returns a pool of 3-6 template-filled conversation-starter strings built from real
+  shared interests (up to 2), shared personality-prompt themes with the partner's
+  actual answer quoted (up to 2, truncated to 80 chars), same dating intention, same
+  city, a shared language, and matching diet — falling back to a small
+  generic-but-decent pool (deliberately never `"Hi"`/`"Hello"` — the whole point of the
+  feature) to top up to at least 3 when there isn't enough real overlap to personalize
+  from. `backend/routes/matches.js` — imported both utils; `GET /api/matches` now
+  fetches the caller's own profile once (alongside the existing batched other-user
+  profile/verification fetches) and includes a `compatibility` field on every match
+  row; two new routes, `GET /api/matches/:matchId/compatibility` and
+  `GET /api/matches/:matchId/icebreakers`, both protected and reusing the exact same
+  `loadAuthorizedMatch()` participant/unmatch/block gate the message routes already
+  use (no new authorization logic to review). No `exclude` param on the icebreakers
+  route — chose the simpler of the two suggested designs (a larger pool the frontend
+  cycles through locally) since the pool is already fully deterministic per pair, so a
+  server round-trip for "another one" would only ever return the same list.
+- **Frontend:** `frontend/src/components/CompatibilityBadge.jsx` (new) — the
+  `CompatibilityBadge` component `docs/DESIGN_SYSTEM.md` already named in its Reusable
+  Component Library list ("shows match/compatibility signal (esp. once AI 'Why You
+  Match' ships in V2)"), built to the same dumb/presentational pattern as the existing
+  `VerificationBadge.jsx`. `frontend/src/components/MatchModal.jsx` — on mount, fetches
+  compatibility + one icebreaker suggestion for the new match (best-effort, non-blocking
+  — a fetch failure never blocks "Start a conversation"), shown as a "Why you match"
+  panel + a suggested-icebreaker line below the avatar. `frontend/src/pages/
+  Matches.jsx` — a `CompatibilityBadge` per match card (only rendered when
+  `score > 0`), alongside the existing verification badges. `frontend/src/pages/
+  Chat.jsx` — `CompatibilityBadge` in the header next to the match's name; a "Why you
+  match" reasons strip below the header (only rendered when there are genuine reasons);
+  an icebreaker suggestion bar above the message form with "Use" (prefills the message
+  box via the existing `text` state — never auto-sends, per the task's explicit
+  requirement) and "Generate another" (cycles `icebreakerIndex` through the
+  already-fetched pool locally, wrapping around — no re-fetch). `frontend/src/api.js`
+  — new `getMatchCompatibility(matchId)` / `getMatchIcebreakers(matchId)`.
+- **Tests performed:** Backend — the project's dev server (already running under
+  `nodemon` in this sandbox) picked up the route changes with no crash; `GET
+  /api/health` returned `200`; `curl` with no `Authorization` header against `GET
+  /api/matches`, `GET /api/matches/:matchId/compatibility`, and `GET /api/matches/
+  :matchId/icebreakers` all returned `401` as expected. A standalone Node script
+  (`backend/_verify_task15.js`, deleted before commit per this project's established
+  "verify with throwaway scripts, never commit them" convention) exercised both utils
+  directly with realistic fake `Profile` objects (no DB connection needed, matching
+  `backend/utils/matchUtils.js`'s existing "pure, DB-independent, standalone-testable"
+  pattern): (1) identical profiles scored 100 with 5 reasons spanning every category;
+  (2) fully disjoint profiles (different intention/city/interests/languages/lifestyle/
+  prompts) scored exactly 0 with an empty `reasons` array — confirming no reason is
+  ever fabricated — and produced an icebreaker pool drawn entirely from the generic
+  fallback list; (3) a partial-overlap case (differing dating intention, 4 shared
+  interests) correctly omitted the intention-match reason and correctly capped/joined
+  the interest reason at the top 3 ("Travel, Cricket and Cooking"); (4) a missing/null
+  profile on either side never threw — returned a neutral zero/empty compatibility
+  result and the generic icebreaker fallback pool; (5) icebreaker pools were confirmed
+  duplicate-free and always sized 3-6. All checks passed. Frontend — `npm run build`
+  clean (no new warnings/errors); `npm run lint` (oxlint) — 0 errors, the same 2
+  pre-existing `only-export-components` warnings on `AuthContext.jsx`/
+  `NotificationContext.jsx` carried forward unrelated to this change.
+- **Concurrency note:** two other background agents were working on this same branch
+  concurrently (Task #17 — referral program; a Safe Date/Date Planner/Date Ideas task)
+  — their in-progress, uncommitted changes were visible in this shared working tree at
+  various points during this session (`backend/models/User.js`, `backend/routes/
+  auth.js`, `backend/server.js`, `backend/constants/subscriptionOptions.js`,
+  `frontend/src/context/AuthContext.jsx`, `frontend/src/pages/Signup.jsx`, plus several
+  new referral/safe-date/date-idea files) but were never touched, staged, or committed
+  by this session — only the files listed above were staged. See this file's own commit
+  for the exact diff, and `git log`/any rebase-conflict resolution note near this
+  entry's own commit hash for how any overlap with their pushed commits was resolved.
+- **Next task:** AI Profile Coach and AI Date Ideas remain the two not-yet-started V2
+  AI items (see docs/ROADMAP.md Phase 11) — both would need the same real
+  `ANTHROPIC_API_KEY` + backend-only Claude API call this entry's features
+  deliberately did not attempt, given no credentials exist; see `docs/ARCHITECTURE.md`'s
+  AI layer section for the intended design once real credentials are available. Beyond
+  AI, the "Before real production launch" gaps in `TODO.md` remain the standing
+  higher-priority default (live MongoDB verification, real provider credentials,
+  automated test suite, etc.) absent a further specific user request for V2 scope.
+
+---
+
 ## 2026-08-18 — Instagram profile linking (post-MVP, user-requested)
 
 - **Phase:** Post-MVP feature addition — requested by the user after the MVP (all 12

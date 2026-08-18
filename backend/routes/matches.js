@@ -10,6 +10,8 @@ const { isParticipant, otherParticipant } = require('../utils/matchUtils');
 const { createNotification } = require('../utils/notificationUtils');
 const { toPublicVerificationBadges } = require('../utils/verificationUtils');
 const { getBlockedUserIds, isBlockedEitherWay } = require('../utils/blockUtils');
+const { computeCompatibility } = require('../utils/compatibilityUtils');
+const { generateIcebreakers } = require('../utils/icebreakerUtils');
 const { roomName, isUserInRoom } = require('../socket');
 const { DEFAULT_MATCHES_LIMIT, MAX_MATCHES_LIMIT } = require('../constants/discoveryOptions');
 const {
@@ -123,11 +125,15 @@ router.get('/', requireAuth, async (req, res) => {
     );
     // Task #9 — Verification: bulk-fetch verification badges alongside
     // profiles, same batching approach used for the profiles lookup itself.
-    const [profiles, verificationUsers] = await Promise.all([
+    // Task #15 — Smart Icebreakers + Why-You-Match: also fetch the caller's
+    // own profile once (not per-match) so each match's `compatibility` can
+    // be computed against it without an extra query per row.
+    const [profiles, verificationUsers, myProfile] = await Promise.all([
       Profile.find({ user: { $in: otherUserIds } }),
       User.find({ _id: { $in: otherUserIds } }).select(
         'mobileVerification.status photoVerification.status'
       ),
+      Profile.findOne({ user: req.user.id }),
     ]);
     const profileByUser = new Map(profiles.map((p) => [p.user.toString(), p]));
     const verificationByUser = new Map(verificationUsers.map((u) => [String(u._id), u]));
@@ -149,12 +155,84 @@ router.get('/', requireAuth, async (req, res) => {
           photo: primaryPhoto,
           ...toPublicVerificationBadges(verificationByUser.get(otherUserId)),
         },
+        // Task #15 — Smart Icebreakers + Why-You-Match (V2, user-requested).
+        // Deterministic profile-comparison heuristic, NOT a real AI/LLM call
+        // — see backend/utils/compatibilityUtils.js's top comment and
+        // MOCK_FEATURES.md. `{ score: 0, reasons: [] }` if either side has no
+        // profile (shouldn't normally happen for an existing match, but this
+        // is always an enrichment on top of an already-real match, never a
+        // hard requirement to view one).
+        compatibility: computeCompatibility(myProfile, p),
       };
     });
 
     return res.json({ matches: result, page, hasMore });
   } catch (err) {
     console.error('List matches error:', err);
+    return res.status(500).json({ message: 'Something went wrong, please try again' });
+  }
+});
+
+// GET /api/matches/:matchId/compatibility (protected, participant-only) —
+// Task #15 (Smart Icebreakers + Why-You-Match, V2, user-requested). "Why You
+// Match": the same deterministic compatibility heuristic already embedded
+// in each row of GET /api/matches above, exposed as its own endpoint too so
+// a screen that only has a matchId (e.g. Chat.jsx, or MatchModal right after
+// a swipe) can fetch it without re-paging through the matches list. NOT a
+// real AI/LLM call — see backend/utils/compatibilityUtils.js's top comment
+// and MOCK_FEATURES.md. Reuses the exact same loadAuthorizedMatch()
+// participant/unmatch/block gate as the message routes above.
+router.get('/:matchId/compatibility', requireAuth, async (req, res) => {
+  try {
+    const auth = await loadAuthorizedMatch(req.params.matchId, req.user.id);
+    if (auth.status) return res.status(auth.status).json({ message: auth.message });
+    const { match } = auth;
+    const otherId = otherParticipant(match, req.user.id);
+
+    const [myProfile, otherProfile] = await Promise.all([
+      Profile.findOne({ user: req.user.id }),
+      Profile.findOne({ user: otherId }),
+    ]);
+
+    return res.json({
+      matchId: match._id,
+      compatibility: computeCompatibility(myProfile, otherProfile),
+    });
+  } catch (err) {
+    console.error('Match compatibility error:', err);
+    return res.status(500).json({ message: 'Something went wrong, please try again' });
+  }
+});
+
+// GET /api/matches/:matchId/icebreakers (protected, participant-only) —
+// Task #15 (Smart Icebreakers + Why-You-Match, V2, user-requested). Returns
+// a pool of 3-6 deterministic, template-based conversation starters built
+// from real overlaps between the two participants' profiles (falling back
+// to a small set of generic-but-decent starters when there isn't enough
+// overlap to personalize from — never "Hi"/"Hello"). NOT a real AI/LLM call
+// — see backend/utils/icebreakerUtils.js's top comment and
+// MOCK_FEATURES.md. "Generate another" (frontend/src/pages/Chat.jsx) cycles
+// through the returned pool locally rather than re-calling this endpoint —
+// the pool is already fully deterministic for a given pair, so a re-call
+// would only ever return the same list.
+router.get('/:matchId/icebreakers', requireAuth, async (req, res) => {
+  try {
+    const auth = await loadAuthorizedMatch(req.params.matchId, req.user.id);
+    if (auth.status) return res.status(auth.status).json({ message: auth.message });
+    const { match } = auth;
+    const otherId = otherParticipant(match, req.user.id);
+
+    const [myProfile, otherProfile] = await Promise.all([
+      Profile.findOne({ user: req.user.id }),
+      Profile.findOne({ user: otherId }),
+    ]);
+
+    return res.json({
+      matchId: match._id,
+      icebreakers: generateIcebreakers(myProfile, otherProfile),
+    });
+  } catch (err) {
+    console.error('Match icebreakers error:', err);
     return res.status(500).json({ message: 'Something went wrong, please try again' });
   }
 });

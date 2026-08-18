@@ -60,8 +60,11 @@ async function request(path, { method = 'GET', body, auth = false } = {}) {
   return data;
 }
 
-export function signup(email, password) {
-  return request('/api/auth/signup', { method: 'POST', body: { email, password } });
+export function signup(email, password, referralCode) {
+  return request('/api/auth/signup', {
+    method: 'POST',
+    body: { email, password, ...(referralCode ? { referralCode } : {}) },
+  });
 }
 
 export function login(email, password) {
@@ -139,6 +142,20 @@ export function markMessagesRead(matchId) {
     method: 'PATCH',
     auth: true,
   });
+}
+
+// --- Smart Icebreakers + Why-You-Match (Task #15, V2, user-requested) -----
+// Both are deterministic, heuristic profile-comparison endpoints — NOT a
+// real AI/LLM call (no ANTHROPIC_API_KEY configured in this project). See
+// backend/utils/compatibilityUtils.js / backend/utils/icebreakerUtils.js
+// and MOCK_FEATURES.md.
+
+export function getMatchCompatibility(matchId) {
+  return request(`/api/matches/${matchId}/compatibility`, { method: 'GET', auth: true });
+}
+
+export function getMatchIcebreakers(matchId) {
+  return request(`/api/matches/${matchId}/icebreakers`, { method: 'GET', auth: true });
 }
 
 // --- Notifications (Task #6) ------------------------------------------------
@@ -306,4 +323,55 @@ export function suspendAdminUser(userId) {
 
 export function reinstateAdminUser(userId) {
   return request(`/api/admin/users/${userId}/reinstate`, { method: 'PATCH', auth: true });
+}
+
+// --- Referral program (Task #17 — "Invite & Earn", V2 scope, see
+// docs/BUSINESS_PLAN.md's Growth Strategy). ---------------------------------
+
+export function getMyReferrals() {
+  return request('/api/referrals/me', { method: 'GET', auth: true });
+}
+
+// --- Safe Date mode + Date Planner (Task #18 — V2, see docs/ROADMAP.md's Phase 12).
+// "Missed check-in" / the pre-date reminder are both computed at READ time by the
+// backend (no scheduler exists in this project) — see docs/API_DOCUMENTATION.md's
+// Safe Date section and MOCK_FEATURES.md, and note `isOverdue`/`isReminderWindow` on
+// every SafeDate object below are exactly that computed state, refreshed on every GET.
+
+export function createSafeDate(fields) {
+  return request('/api/safe-dates', { method: 'POST', body: fields, auth: true });
+}
+
+export function getSafeDates({ page, limit, status } = {}) {
+  return request(`/api/safe-dates${toQueryString({ page, limit, status })}`, {
+    method: 'GET',
+    auth: true,
+  });
+}
+
+export function getSafeDate(id) {
+  return request(`/api/safe-dates/${id}`, { method: 'GET', auth: true });
+}
+
+export function checkInSafeDate(id) {
+  return request(`/api/safe-dates/${id}/check-in`, { method: 'PATCH', auth: true });
+}
+
+export function completeSafeDate(id) {
+  return request(`/api/safe-dates/${id}/complete`, { method: 'PATCH', auth: true });
+}
+
+export function cancelSafeDate(id) {
+  return request(`/api/safe-dates/${id}/cancel`, { method: 'PATCH', auth: true });
+}
+
+// Date Planner — a stateless, curated suggestion generator (NOT real AI, no
+// ANTHROPIC_API_KEY configured — same constraint already documented for Task #15's
+// Icebreakers/Why-You-Match). Nothing is persisted; see
+// backend/utils/datePlanUtils.js.
+export function getDateIdeas({ budget, activityType, city } = {}) {
+  return request(`/api/date-ideas${toQueryString({ budget, activityType, city })}`, {
+    method: 'GET',
+    auth: true,
+  });
 }

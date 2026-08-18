@@ -304,13 +304,19 @@ note below. Routes in `backend/routes/matches.js`.
       {
         "id": "...",
         "matchedAt": "...",
-        "otherUser": { "userId", "displayName", "age", "city", "district", "datingIntention", "photo", "mobileVerified", "photoVerified" }
+        "otherUser": { "userId", "displayName", "age", "city", "district", "datingIntention", "photo", "mobileVerified", "photoVerified" },
+        "compatibility": { "score": 87, "reasons": ["Same relationship goal: Serious dating", "You both love Travel, Cricket and Cooking", "Both in Raipur"] }
       }
     ],
     "page": 1,
     "hasMore": false
   }
   ```
+  `compatibility` — `[IMPLEMENTED, Task #15, V2, user-requested]` — see "Why-You-Match
+  & Smart Icebreakers" below. Computed live, on every call, between the caller's own
+  profile and each match partner's profile — never stored/cached on the `Match`
+  document itself. `{ score: 0, reasons: [] }` if either side has no profile (shouldn't
+  normally happen for an existing match, but handled without erroring either way).
 - **Errors:** `401`; `500`.
 
 ### Divergence from the original draft
@@ -324,6 +330,56 @@ note below. Routes in `backend/routes/matches.js`.
   pass; "who liked you" is typically a premium-gated feature anyway (see
   `docs/BUSINESS_PLAN.md`) and unmatch can follow once basic matching is proven
   end-to-end against a real database.
+
+### Why-You-Match & Smart Icebreakers — `[IMPLEMENTED, Task #15, V2, user-requested, heuristic — NOT real AI]`
+
+Added post-MVP, 2026-08-18, by explicit user request (V2 scope brought forward — see
+`docs/ROADMAP.md`'s Phase 11 and `PROJECT_STATE.md`'s newest entry). Both endpoints below
+are **deterministic, server-side profile-comparison heuristics** — this project has no
+`ANTHROPIC_API_KEY` configured anywhere (see `backend/.env.example`), so neither of these
+ever calls the real Claude API or any other LLM. See `backend/utils/compatibilityUtils.js`
+/ `backend/utils/icebreakerUtils.js`'s top comments and `MOCK_FEATURES.md` for the full
+explanation, the exact weighting used, and what a real AI upgrade would need
+(`docs/ARCHITECTURE.md`'s AI layer section). Both routes reuse the exact same
+`loadAuthorizedMatch()` participant/unmatch/block gate as the Messaging routes below —
+same auth, same 400/403/404 semantics.
+
+#### `GET /api/matches/:matchId/compatibility`
+- **Auth:** required, caller must be a participant of an active (not-unmatched,
+  not-blocked) match.
+- "Why You Match": recomputes the same `compatibility` object already embedded in each
+  row of `GET /api/matches` above, exposed as its own endpoint so a screen that only has
+  a `matchId` (e.g. Chat, or the "It's a Match!" modal right after a swipe) doesn't need
+  to re-page through the matches list just to get it.
+- **Success response:** `200 OK` —
+  ```json
+  { "matchId": "...", "compatibility": { "score": 87, "reasons": ["Same relationship goal: Serious dating", "..."] } }
+  ```
+  `score` is 0-100 (never claims scientific/psychological accuracy); `reasons` is 0-5
+  short, plain-language strings, only ever built from genuine profile overlap — never
+  fabricated to pad the list out. A pair with no real overlap gets `{ "score": 0,
+  "reasons": [] }`.
+- **Errors:** `400` — invalid `matchId`; `403` — not a participant, unmatched, or a block
+  is in effect; `404` — no such match; `401`; `500`.
+
+#### `GET /api/matches/:matchId/icebreakers`
+- **Auth:** required, same participant gate as above.
+- Smart Icebreakers: a pool of 3-6 deterministic, template-filled conversation-starter
+  strings built from real overlaps between the two participants' `Profile` documents
+  (shared interests, shared personality-prompt themes, same dating intention, same city,
+  shared language, matching diet) — e.g. `"You both love Travel — ask them about it!"`.
+  Falls back to a small set of generic-but-decent starters (never `"Hi"`/`"Hello"`) when
+  there isn't enough real overlap to personalize from.
+- **No `exclude` param / no server-side "regenerate":** the returned pool is already
+  fully deterministic for a given pair of profiles, so the frontend's "Generate another"
+  button (`frontend/src/pages/Chat.jsx`) simply cycles through the already-fetched pool
+  locally rather than re-calling this endpoint — a re-call would only ever return the
+  same list.
+- **Success response:** `200 OK` —
+  ```json
+  { "matchId": "...", "icebreakers": ["You both love Travel — ask them about it!", "..."] }
+  ```
+- **Errors:** same as `GET .../compatibility` above.
 
 ## 5. Messaging — `[IMPLEMENTED]`
 
@@ -1112,3 +1168,83 @@ Base path: `/api/admin/analytics` — role: `ANALYST`+.
 - `GET /api/admin/analytics/overview` — signups, active users, match-to-conversation
   rate, conversation response rate, verified-user rate, D30 retention, premium
   conversion (see `docs/BUSINESS_PLAN.md` for why these metrics over raw swipe volume).
+
+## 13. Referral Program ("Invite & Earn") — `[IMPLEMENTED, Task #17, V2 scope]`
+
+Base path: `/api/referrals` (routes in `backend/routes/referrals.js`); referral-code
+generation and signup-time linking live in `backend/routes/auth.js`; the shared
+generation/reward helpers live in `backend/utils/referralUtils.js`; enums/constants in
+`backend/constants/referralOptions.js`. See `docs/BUSINESS_PLAN.md`'s Growth Strategy
+and `docs/DATABASE_SCHEMA.md`'s `referrals` section for the full design writeup
+(including the divergence from the originally-`[PLANNED]` separate `referrals`
+collection, and the reward-mechanism rationale).
+
+### `POST /api/auth/signup` — extended request body
+
+- **Request body (additive to Section 1 above):**
+  ```json
+  { "email": "user@example.com", "password": "at-least-8-chars", "referralCode": "AB3D9FQ" }
+  ```
+- `referralCode` is **optional**. If provided:
+  - It's normalized (trimmed, upper-cased) and checked against the referral code
+    format (7 characters, from the alphabet in
+    `backend/constants/referralOptions.js#REFERRAL_CODE_ALPHABET` — uppercase
+    alphanumeric excluding ambiguous `0`/`O`/`1`/`I`), then looked up against
+    existing users' `referralCode`.
+  - **Documented UX choice:** an invalid-format or unknown/typo'd code does **not**
+    reject the signup — the account is still created normally (`201`), just without a
+    referral relationship, and a warning is logged server-side
+    (`backend/routes/auth.js`). This is the explicitly-preferred, more user-friendly
+    option per this feature's design (real referral programs don't block account
+    creation over a mistyped code) — see `docs/DATABASE_SCHEMA.md`'s `referrals`
+    section for the full reasoning.
+  - A valid, existing code links the new user's `referredBy` to the code owner and —
+    synchronously, before the signup response is sent — grants **both** the referrer
+    and the new referee a reward: **7 days of `CG_PLUS`**, each via a new
+    `Subscription` document (`paymentProvider: 'referral_reward'`,
+    `backend/utils/referralUtils.js#grantMutualReferralReward()`). A reward-grant
+    failure (e.g. a transient error) never turns the signup response into an error —
+    each side's grant is isolated in its own try/catch, and the signup itself always
+    succeeds once the account is created.
+  - "Can't refer yourself" is structurally impossible at signup time (the referrer
+    must already have an account — and therefore an existing `referralCode` — for
+    their code to resolve to anyone at all; a brand-new signup's own code doesn't
+    exist yet at the moment its `referralCode` body field would be checked), so no
+    separate self-referral check exists.
+- No change to the success/error response shapes documented in Section 1.
+
+### `GET /api/referrals/me`
+- **Auth:** required.
+- Returns the caller's own referral code, a shareable invite string (no real
+  deep-link infrastructure — see `MOCK_FEATURES.md` — just a copyable code + a
+  templated message), how many people have signed up using their code (computed via
+  `User.countDocuments({ referredBy: callerId })`, not a denormalized counter — see
+  `docs/DATABASE_SCHEMA.md`), and the caller's own most recent reward grants (the
+  rewards *they* earned from referring people — not their referees' rewards).
+- **Success response:** `200 OK`
+  ```json
+  {
+    "referralCode": "AB3D9FQ",
+    "shareText": "Join CG Dating with my code: AB3D9FQ",
+    "referralCount": 3,
+    "rewards": [
+      { "id": "...", "planCode": "CG_PLUS", "planName": "CG Plus", "grantedAt": "...", "expiresAt": "..." }
+    ]
+  }
+  ```
+  `rewards` is capped at the 5 most recent (`RECENT_REWARDS_LIMIT` in
+  `backend/routes/referrals.js`) — this is a summary, not a paginated history.
+- **Errors:** `401`; `404` — caller's user record not found (should not happen for a
+  valid token); `500`.
+
+### Anti-abuse notes
+- A user's `referredBy` can be set **at most once, ever**, enforced at the schema
+  level (`immutable: true` on `backend/models/User.js`'s `referredBy` field) — not
+  just app logic. There is no route anywhere in this codebase that can set or change
+  `referredBy` after signup (`GET /api/referrals/me` above is the only referral route
+  that exists, and it's read-only) — referral linking only ever happens inline in the
+  `POST /api/auth/signup` handler, on the brand-new document, at creation time.
+- Referral codes are guaranteed unique by `backend/models/User.js`'s schema-level
+  `unique` index on `referralCode`, generated with retry-on-collision
+  (`backend/utils/referralUtils.js#generateUniqueReferralCode()`); see
+  `docs/DATABASE_SCHEMA.md` for the full generation-strategy writeup.
