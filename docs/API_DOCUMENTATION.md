@@ -268,12 +268,100 @@ section for the full schema/validation contract and
 - `DELETE /api/profile/me/photos/:photoId` — photo removal — not built yet, only
   add is implemented.
 
-## 3. Discovery — `[IMPLEMENTED, extended by Task #14]`
+## 3. Discovery — `[IMPLEMENTED, extended by Task #14, ranked by Task #19]`
 
 Base path: `/api/discovery`. All routes require auth. Routes in
 `backend/routes/discovery.js`.
 
-### `GET /api/discovery/feed`
+### `GET /api/discovery/feed` — two distinct layers, in order
+
+**`[NEW, Task #19, V2, user-requested — "matching function aur profile
+suggestion ko algorithm samjha kar optimize karo, jaise other dating apps
+kaam karte hain"]`** This endpoint composes two genuinely distinct layers,
+run in this order, and it's worth being explicit about which is which:
+
+1. **ELIGIBILITY (Task #14, unchanged by this task)** — the hard yes/no gate
+   described in every bullet below this box (bidirectional gender/age
+   matching, distance cap, dating-intention, verified-only, incognito,
+   blocks, already-swiped, already-matched, suspended). A candidate that
+   fails this is never even fetched from the database — this is enforced as
+   a MongoDB query filter, not an in-memory check.
+2. **RANKING (Task #19, new)** — among only the candidates that already
+   passed layer 1, a weighted score decides the ORDER they're returned in.
+   Ranking can never surface an ineligible candidate (it only ever operates
+   on eligibility's own output) and can never drop an eligible one either
+   (see "candidate pool" below) — it purely reorders.
+
+**Ranking algorithm (`backend/utils/discoveryRankingUtils.js`):** a
+heuristic weighted scorer, not a real ML model — this project has no
+training data or ML infrastructure (same "documented heuristic, not real
+AI" pattern as Task #15's Why-You-Match/Task #18's Date Planner, see
+`MOCK_FEATURES.md`). Four signals, each independently normalized to a 0-100
+scale before weighting so no signal dominates by scale accident:
+- **Compatibility (weight `0.45`, the heaviest)** — Task #15's own
+  `computeCompatibility()` score, reused directly (not re-derived a third
+  time). The most personalized signal available, so it gets the largest
+  weight.
+- **Distance closeness (weight `0.20`)** — closer candidates score higher,
+  relative to the caller's own `maxDistanceKm` preference (`0` distance →
+  100, at the preference's own cap → 0). A candidate with an unresolvable
+  distance (either side missing coordinates — see Task #14's fail-open
+  distance filtering above) gets the neutral midpoint (`50`), never a
+  penalty or a boost — consistent with Task #14's own "never punish a data
+  gap" philosophy.
+- **Trust / completeness (weight `0.20`)** — `profileCompletionPercentage`
+  (0-100, already computed) contributes up to 60 points, and Task #9's
+  `mobileVerified`/`photoVerified` booleans each add 20 — a genuine,
+  visible incentive to verify, without making an unverified-but-complete
+  profile disappear.
+- **Recent activity (weight `0.15`)** — `users.lastLoginAt` (stamped on
+  every successful login, `backend/routes/auth.js`), decayed linearly from
+  100 (just logged in) to 0 over 30 days of inactivity. This is the ONLY
+  genuine "last active" timestamp anywhere in this codebase — deliberately
+  not proxied from `profiles.updatedAt` (that only reflects when the
+  profile content was last edited, not when the person was last active). A
+  missing `lastLoginAt` gets the neutral midpoint, same fail-open rule as
+  distance above.
+
+The four weights are named constants in
+`backend/utils/discoveryRankingUtils.js#DEFAULT_RANKING_WEIGHTS`
+(`{ compatibility: 0.45, distance: 0.2, trust: 0.2, activity: 0.15 }`, sums
+to `1.0`) and are **admin-configurable at runtime** —
+`GET`/`PATCH /api/admin/discovery/ranking-weights` (ADMIN+, see this doc's
+Admin section) — fulfilling docs/BUSINESS_PLAN.md's "must remain
+configurable" expectation for a weighted-model formula. **Honestly scoped:**
+this configuration is in-process only, not persisted to the database — a
+server restart resets to the defaults; see that file's own top comment for
+why a full persisted-config collection wasn't built for four numbers in
+this pass.
+
+**Candidate pool, and how ranking composes with pagination
+(`backend/constants/discoveryOptions.js#RANKING_POOL_SIZE = 150`):** rather
+than scoring the entire eligible user base on every request (explicitly
+avoided for efficiency), up to 150 already-eligible candidates are fetched
+per request (a cheap, indexed `createdAt`-desc query — the same shape Task
+#14's filter already used), and ONLY that bounded pool is scored + sorted;
+`page`/`limit` are then applied as a slice over the already-sorted pool, in
+application code, not as a second database query per page. **Known,
+documented trade-off** (same shape as Task #14's own distance-filter
+trade-off below): once `page * limit` exceeds 150, `hasMore` becomes
+`false` even if more eligible candidates exist further into the
+collection — requesting page 1 again (which re-draws a fresh top-150 pool)
+is the workaround, matching the pattern already established for "search
+wider" via `?maxDistanceKm=`.
+
+**Response transparency:** each profile card in the response now also
+carries a `compatibility: { score, reasons }` field — Task #15's
+Why-You-Match output, computed once per candidate (already paid for, since
+ranking needs it anyway) and surfaced the same way `GET /api/matches`
+already does. `frontend/src/pages/Discovery.jsx` shows this as the existing
+`CompatibilityBadge` component (reused from Task #15, only rendered for a
+genuine `score > 0`) plus the single top reason as a small text line —
+deliberately light, since the swipe-card UI is meant to stay fast/glanceable
+and ranking itself remains otherwise invisible (no score/order shown), same
+as how real dating apps surface "why" without ever showing a raw ranking
+number.
+
 - **Query params (all optional):**
   - `page` (default `1`), `limit` (default `10`, capped at `20`).
   - `datingIntention` (must be one of the `datingIntention` enum) — **one-off
@@ -335,15 +423,17 @@ Base path: `/api/discovery`. All routes require auth. Routes in
   pool, even though more distant matches exist further into the collection — the
   documented workaround is a larger one-off `?maxDistanceKm=` override ("search
   wider"). The `2dsphere` index on `profiles.location` remains in place for a
-  future real geospatial query (e.g. Task #19's ranking layer) but isn't the
-  mechanism this endpoint uses.
+  future real geospatial query but isn't the mechanism this endpoint uses.
 - Each returned profile carries a `[NEW, Task #14]` `distanceKm` field (`number |
   null`) — the caller's actual computed distance to that candidate, or `null` if
-  unknown. Exposed for both the frontend UI and Task #19's future ranking layer.
+  unknown. Also feeds Task #19's ranking distance signal (see the ranking box
+  above).
 - The response also includes `[NEW, Task #14]` `appliedPreferences` — the fully
   resolved `{ maxDistanceKm, minAge, maxAge, datingIntentions, verifiedOnly }` that
   was actually applied to this request (persisted values merged with any query-param
   overrides) — lets the frontend show "showing wider results" banners accurately.
+- Each returned profile also carries `[NEW, Task #19]` `compatibility: { score,
+  reasons }` — see the ranking box above.
 - **`[NEW, Task #14]` Incognito exclusion:** any profile with
   `privacySettings.incognito: true` is excluded from every OTHER user's feed
   entirely (the incognito user can still browse others normally).
@@ -360,7 +450,9 @@ Base path: `/api/discovery`. All routes require auth. Routes in
   Profiles missing `displayName`/`dateOfBirth`/`gender` (i.e. not complete
   enough to be worth showing) are also excluded.
 - **Success response:** `200 OK` —
-  `{ "profiles": [ <public profile + distanceKm, see above> ], "page": 1, "hasMore": true, "appliedPreferences": {...} }`
+  `{ "profiles": [ <public profile + distanceKm + compatibility, see above> ], "page": 1, "hasMore": true, "appliedPreferences": {...} }`
+  — `profiles` is already sorted by Task #19's `rankScore` descending (the
+  score itself is never returned — see the ranking box above for what is).
 - **Errors:** `400` — invalid `datingIntention`, or an invalid `maxDistanceKm`/
   `minAge`/`maxAge` override (out of range, not a whole number, or `maxAge <
   minAge`); `404` — caller has no profile yet
@@ -1073,7 +1165,7 @@ Base path: `/api/events`
 - `POST /api/events` — admin/organizer role required — create an event.
 - `POST /api/events/:id/rsvp` — auth required.
 
-## 11. Admin — `[IMPLEMENTED, basic]`
+## 11. Admin — `[IMPLEMENTED, basic; extended by Task #19]`
 
 Base path: `/api/admin` (routes in `backend/routes/admin.js`; role middleware in
 `backend/middleware/adminAuth.js`; audit-log helper in
@@ -1276,6 +1368,43 @@ needed to make suspend/reinstate/role-change usable without already knowing a ta
 - **Success response:** `200 OK` — `{ "userId": "...", "role": "MODERATOR" }`
 - **Errors:** `400` — invalid `userId` or `role`; `401`; `403` (caller isn't
   `SUPER_ADMIN`); `404` — no such user; `500`.
+
+### `GET /api/admin/discovery/ranking-weights` — `[NEW, Task #19, V2, user-requested]`
+- **Role:** `ADMIN`+ (`ADMIN` or `SUPER_ADMIN` — the same tier as suspend/reinstate;
+  tuning the discovery ranking algorithm is a product-wide setting change, not a
+  `MODERATOR`-level moderation action).
+- Returns the four Task #19 discovery-ranking weights currently in effect (see this
+  doc's Discovery section), plus the shipped defaults for reference.
+- **Success response:** `200 OK` —
+  ```json
+  {
+    "weights": { "compatibility": 0.45, "distance": 0.2, "trust": 0.2, "activity": 0.15 },
+    "defaults": { "compatibility": 0.45, "distance": 0.2, "trust": 0.2, "activity": 0.15 }
+  }
+  ```
+- **Errors:** `401`; `403` (caller isn't `ADMIN`+); `500`.
+
+### `PATCH /api/admin/discovery/ranking-weights` — `[NEW, Task #19, V2, user-requested]`
+- **Role:** `ADMIN`+.
+- **Request body:** a partial or full `{ compatibility?, distance?, trust?, activity? }`
+  object (any subset of the four keys) — only the provided keys change, the rest keep
+  their current value.
+- **Validation:** every provided value must be a non-negative finite number, and the
+  resulting four weights (after merging with whatever wasn't provided) must sum to
+  within `0.9`-`1.1` of `1.0` — an invalid update is rejected with `400` and the stored
+  weights are left completely unchanged (no partial apply).
+- **Honestly scoped — not persisted to the database.** This mutates an in-process value
+  (`backend/utils/discoveryRankingUtils.js`'s module-level weights) — it takes effect
+  immediately, for every request, on this server process, but a server restart resets
+  the weights back to the shipped defaults. Fulfils `docs/BUSINESS_PLAN.md`'s "must
+  remain configurable" expectation for the weighted-model formula for this MVP pass;
+  see that util file's own top comment for why a full persisted `config`/`settings`
+  collection wasn't built just for four numbers in this pass.
+- Writes an `AuditLog` entry (`action: 'discovery.ranking_weights_changed'`, `details: {
+  weights }` — the full resulting weights object, not just the changed keys).
+- **Success response:** `200 OK` — `{ "weights": { "compatibility": 0.5, "distance": 0.2, "trust": 0.2, "activity": 0.1 } }`
+- **Errors:** `400` — no keys provided, a negative/non-numeric weight, or the weights
+  don't sum to ~`1.0`; `401`; `403` (caller isn't `ADMIN`+); `500`.
 
 ### Becoming the first admin
 There is no self-serve "become admin" flow, anywhere — that's intentional, promoting an

@@ -12,6 +12,30 @@ districts/towns — the product and architecture must not hardcode support to on
 major cities. The product supports dating, serious relationships, marriage/life-partner
 search, and friendship, with dating intention as a first-class field.
 
+## Matching & Discovery Ranking
+
+**`[IMPLEMENTED, Task #19, V2, user-requested — "matching function aur profile
+suggestion ko algorithm samjha kar optimize karo, jaise other dating apps kaam karte
+hain"]`** Discovery works in two layers: hard eligibility (bidirectional gender/age
+compatibility, distance, dating-intention, verified-only, incognito, blocks —
+Task #14) decides WHO can see whom at all; a weighted ranking algorithm on top decides
+the ORDER eligible people are shown in, the same way established dating apps surface a
+"best matches first" feed rather than a raw chronological list. Four signals, each
+normalized 0-100 and weighted (compatibility `0.45`, distance-closeness `0.20`,
+profile trust/completeness `0.20`, recent activity `0.15` — sums to `1.0`):
+compatibility (Task #15's own Why-You-Match score — the most personalized signal, so
+the heaviest weight), how close the candidate is, how complete/verified their profile
+is (a genuine incentive to complete verification), and how recently they were last
+active. **The weights are admin-configurable at runtime**
+(`GET`/`PATCH /api/admin/discovery/ranking-weights`, ADMIN+), not a hardcoded formula
+a future pricing/growth experiment would need a code deploy to adjust — though for
+this MVP pass that configuration lives in-process only (resets on server restart, not
+yet a persisted setting; see `docs/DATABASE_SCHEMA.md`'s `discovery_ranking_config`
+divergence note). **Not a real ML model** — a documented, inspectable heuristic
+weighted scorer, same honest pattern as Why-You-Match/Smart Icebreakers/Date Planner
+(see `MOCK_FEATURES.md`); a genuinely learned recommendation model remains V3 scope
+(`docs/ROADMAP.md`'s "ML-based recommendations").
+
 ## Revenue Model — Freemium
 
 - **Free tier** must remain genuinely usable, not a crippled trial: profile creation,

@@ -78,7 +78,15 @@ Core account/auth record.
   codebase ever attempts to write to it after creation anyway (referral
   linking only ever happens inline in the signup handler). See the
   `referrals` section below.
-- `createdAt`, `updatedAt`, `lastLoginAt`
+- `createdAt`, `updatedAt`, `lastLoginAt` — stamped on every successful
+  `POST /api/auth/login` (`backend/routes/auth.js`). **`[REUSED, Task #19,
+  V2, user-requested]`** — this is also the ONLY genuine "last active"
+  timestamp anywhere in this codebase, and Task #19's discovery ranking
+  algorithm (`backend/utils/discoveryRankingUtils.js`) reuses it directly as
+  its recent-activity signal rather than inventing a new field — see
+  `docs/API_DOCUMENTATION.md`'s Discovery section for the decay formula.
+  Deliberately not proxied from `profiles.updatedAt` (that reflects when
+  profile *content* last changed, not when the person was last active).
 - Indexes: unique+sparse on `email`; index on `role` (admin queries — see
   `admin_users` below, now `[IMPLEMENTED]`); unique+sparse on `referralCode`;
   index on `referredBy` (Task #17 — "how many people has this user referred"
@@ -325,6 +333,33 @@ Implemented in `backend/models/Match.js`; routes in `backend/routes/matches.js`
   "Why-You-Match & Smart Icebreakers" section. Smart Icebreakers
   (`backend/utils/icebreakerUtils.js`, `GET /api/matches/:matchId/icebreakers`) are
   computed the same way — live, never persisted.
+- **`[NEW, Task #19, V2, user-requested]` This same live `computeCompatibility()`
+  score is also the heaviest-weighted signal in Task #19's discovery-feed ranking
+  algorithm** (`backend/utils/discoveryRankingUtils.js`, wired into
+  `GET /api/discovery/feed`) — reused directly, not re-derived, and also returned
+  on every Discovery card's `compatibility` field for the same reason it's
+  returned on `GET /api/matches` rows. See `docs/API_DOCUMENTATION.md`'s Discovery
+  section for the full ranking-algorithm writeup (weights, the other three
+  signals, and how ranking composes with the pre-existing eligibility filter).
+  **No new persisted field or collection was added for ranking itself** — like
+  compatibility, `rankScore` is always computed live per request, over a bounded
+  candidate pool, never stored.
+
+### `discovery_ranking_config` — **not implemented as a persisted collection**
+**`[NEW, Task #19, V2, user-requested]`** The four ranking weights
+(`compatibility`/`distance`/`trust`/`activity` — see the `matches` section above
+and `docs/API_DOCUMENTATION.md`'s Discovery section) are admin-configurable via
+`GET`/`PATCH /api/admin/discovery/ranking-weights`, but are held as a single
+in-process object in `backend/utils/discoveryRankingUtils.js`
+(`currentRankingWeights`), NOT a database document — a server restart resets
+them to the shipped defaults. This section name is a placeholder for what a
+real persisted version would look like (one document, the same
+`{ compatibility, distance, trust, activity }` shape, read once at process
+start and re-read on `PATCH`) — not built in this pass since nothing else in
+this codebase has a generic app-config collection yet, and adding one for four
+numbers was judged more scope than this MVP pass's "configurable" bar requires.
+See `backend/utils/discoveryRankingUtils.js`'s own top comment for the full
+reasoning.
 
 ### `conversations` — **not implemented as a separate collection**
 **Divergence, implemented for Task #5 (Chat):** a `Match` document already

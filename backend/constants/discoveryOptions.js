@@ -23,6 +23,19 @@ const DEFAULT_MIN_AGE_PREF = 18; // == profileOptions.js's MIN_AGE — the hard 
 const DEFAULT_MAX_AGE_PREF = 45;
 const MAX_AGE_PREF_CAP = 100;
 
+// --- Task #19 — weighted ranking/recommendation algorithm (V2,
+// user-requested: "matching function aur profile suggestion ko algorithm
+// samjha kar optimize karo, jaise other dating apps kaam karte hain"). See
+// backend/utils/discoveryRankingUtils.js for the actual scoring logic. ---
+// How many already-ELIGIBLE candidates (Task #14's hard filters already
+// applied at the DB-query level) are fetched and scored per feed request,
+// bounded well above any single page so ranking has enough of a pool to
+// meaningfully reorder, but explicitly NOT "everyone" — see
+// backend/routes/discovery.js's GET /feed for exactly how this composes
+// with pagination (the sorted pool is paginated in application code, not a
+// second DB query per page).
+const RANKING_POOL_SIZE = 150;
+
 module.exports = {
   SWIPE_ACTIONS,
   DEFAULT_FEED_LIMIT,
@@ -34,4 +47,5 @@ module.exports = {
   DEFAULT_MIN_AGE_PREF,
   DEFAULT_MAX_AGE_PREF,
   MAX_AGE_PREF_CAP,
+  RANKING_POOL_SIZE,
 };

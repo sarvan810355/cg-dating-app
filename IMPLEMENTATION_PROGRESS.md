@@ -10,6 +10,172 @@ next task that follows from it.
 
 ---
 
+## 2026-08-18 — Weighted discovery ranking algorithm (Task #19, V2, user-requested)
+
+- **Phase:** Phase 12 — Growth & Engagement Features (`docs/ROADMAP.md`). V2 feature
+  requested directly by the user in Hindi/Hinglish: "hamare dating app ke matching
+  function aur profile suggestion ko algorithm samjha kar optimize karo, jaise other
+  dating apps kaam karte hain" (understand and optimize our matching/suggestion
+  algorithm so it works properly like other dating apps). Built on top of Task #14
+  (this branch's prior pass), which built the ELIGIBILITY layer for
+  `GET /api/discovery/feed` — a hard MongoDB-query-level yes/no gate. Task #19 adds
+  the RANKING layer: among candidates that already passed eligibility, decide the
+  ORDER they're shown in.
+- **The two-layer split, kept structurally distinct (not just documented):**
+  eligibility is the `filter` object built in `backend/routes/discovery.js` from
+  Task #14's rules — completely untouched by this pass — and ranking only ever
+  operates on `Profile.find(filter)`'s own output. Ranking can never surface an
+  ineligible candidate (there's no code path that adds anything outside `filter`'s
+  matches to the scored pool) and can never drop an eligible one (every candidate in
+  the pool gets scored and returned across pagination, none are filtered out by
+  ranking itself — only the fail-open distance check, inherited unchanged from Task
+  #14, can further narrow the pool, and that's still an eligibility rule, not a
+  ranking one).
+- **New `backend/utils/discoveryRankingUtils.js`:** a heuristic weighted scorer —
+  explicitly **not** a real ML/learned model (no training data, no ML infrastructure,
+  no feedback loop from swipe/match outcomes anywhere in this project; same honest
+  "documented heuristic, not real AI" pattern already established for Task #15's
+  Why-You-Match/Icebreakers and Task #18's Date Planner). `computeRankScore()` blends
+  four signals, each independently normalized to 0-100 before weighting so no signal
+  dominates by scale accident:
+  - **Compatibility (`weight 0.45`, the heaviest)** — Task #15's own
+    `computeCompatibility()` score, reused directly rather than re-derived a third
+    time (the task's own explicit instruction). The most personalized signal
+    available, hence the largest weight.
+  - **Distance closeness (`weight 0.20`)** — reuses Task #14's
+    `geoUtils.js#haversineDistanceKm()`, scored relative to the caller's own
+    `maxDistanceKm` preference (0km → 100, at the preference's own cap → 0). A
+    `null` distance (either side missing a resolvable coordinate — Task #14's
+    fail-open convention) gets the neutral midpoint (`50`), never a penalty or a
+    boost — verified explicitly: an unknown-distance fixture scored strictly better
+    than a known near-the-cap-distance fixture in this pass's verification, proving
+    the "never unfairly tank a data gap" requirement genuinely holds.
+  - **Trust/completeness (`weight 0.20`)** — reuses the existing
+    `profileCompletionPercentage` field (up to 60 of the 100 points) plus Task #9's
+    `mobileVerified`/`photoVerified` booleans (20 points each) — a genuine, visible
+    incentive to complete verification, without making an unverified-but-complete
+    profile disappear from view.
+  - **Recent activity (`weight 0.15`)** — reuses `users.lastLoginAt`, which already
+    existed (stamped on every successful `POST /api/auth/login`,
+    `backend/routes/auth.js`) — the ONLY genuine "last active" timestamp anywhere in
+    this codebase. Deliberately **not** fabricated from `profiles.updatedAt` (that
+    only reflects when profile *content* was last edited, which conflates "recently
+    active" with "recently changed their bio") and no new field/migration was
+    needed — grepped the codebase at implementation time and confirmed
+    `lastLoginAt` was the one honest option, per the task's own instruction to be
+    honest about what activity data actually exists. Decays linearly from 100 (just
+    logged in) to 0 over a 30-day window; a missing `lastLoginAt` gets the neutral
+    midpoint, same fail-open rule as distance.
+  - The four weights are named constants
+    (`DEFAULT_RANKING_WEIGHTS = { compatibility: 0.45, distance: 0.2, trust: 0.2,
+    activity: 0.15 }`, summing to exactly `1.0`) in one easy-to-find place, and are
+    genuinely **admin-configurable at runtime** — see below — fulfilling
+    `docs/BUSINESS_PLAN.md`'s "must remain configurable" expectation for this MVP
+    pass without building a full admin UI (a simple `GET`/`PATCH` on the existing
+    `adminAuth`-protected `/api/admin` routes, exactly as the task spec suggested as
+    the "genuinely fulfills the spec line" option).
+- **`backend/routes/admin.js`:** new `GET`/`PATCH /api/admin/discovery/ranking-weights`
+  (`ADMIN`+ — `SUSPEND_ROLES`, the same tier as suspend/reinstate, since tuning the
+  ranking algorithm is a product-wide setting change, not a `MODERATOR`-level
+  moderation action). `PATCH` accepts a partial or full weights object, validates
+  every provided value is a non-negative finite number and that the resulting four
+  weights sum to within `0.9`-`1.1` of `1.0` (rejecting with `400` and leaving the
+  stored weights completely unchanged on failure — no partial apply), and writes an
+  `AuditLog` entry (`action: 'discovery.ranking_weights_changed'`). **Honestly
+  scoped:** the weights live in a module-level in-process object
+  (`discoveryRankingUtils.js`'s `currentRankingWeights`), not a database document —
+  a server restart resets to the shipped defaults. A real persisted version would
+  need a small one-document `config`/`settings` collection, not built in this pass
+  since nothing else in this codebase has a generic app-config collection yet (see
+  `docs/DATABASE_SCHEMA.md`'s new `discovery_ranking_config` divergence-note
+  section for the full reasoning) — documented as a genuine, not-silently-glossed
+  gap, same honesty standard as every other MOCK_FEATURES.md entry.
+- **`backend/routes/discovery.js` — `GET /feed` rewritten past the eligibility
+  filter (the filter itself untouched):** instead of a DB-level `skip`/`limit` over
+  the filtered collection, the route now fetches a bounded pool of already-eligible
+  candidates (`RANKING_POOL_SIZE = 150`, new constant in
+  `backend/constants/discoveryOptions.js` — deliberately NOT the entire eligible
+  user base, per the task's explicit efficiency warning), applies Task #14's
+  distance fail-open filter over that whole pool (moved from "after the page's
+  DB slice" to "over the whole pool, before scoring", since every pooled candidate
+  needs a real `distanceKm` for the ranking signal above), bulk-fetches
+  verification + `lastLoginAt` for the whole pool in one query (extending the
+  existing verification-badge batch query, no new N+1), computes
+  `compatibility` + `rankScore` once per pooled candidate, sorts descending by
+  `rankScore`, and only THEN slices the `page`/`limit` window over the
+  already-sorted pool. **Documented trade-off (same shape as Task #14's own
+  distance-page trade-off):** once `page * limit` exceeds 150, `hasMore` becomes
+  `false` even though more eligible candidates may exist further into the
+  collection — a fresh page-1 request (which redraws a fresh top-150 pool) is the
+  workaround, matching the existing "search wider" pattern.
+- **Response transparency:** each Discovery card now also carries the same
+  `compatibility: { score, reasons }` field `GET /api/matches` already returns
+  (computed once per candidate either way, so this is free, not an extra query) —
+  the task's own "nice-to-have but valuable" suggestion. `frontend/src/pages/
+  Discovery.jsx` renders it via the existing (Task #15) `CompatibilityBadge`
+  component plus the single top reason as a small text line, only when there's a
+  genuine `score > 0` — deliberately light-touch, since ranking itself stays
+  otherwise invisible (no score/order number ever shown), matching how real dating
+  apps surface "why" without exposing a raw ranking score, per the task's own
+  framing.
+- **Tests performed:** Backend — `node -e "require('./server.js')"` boots cleanly,
+  no import/syntax errors; `GET /api/health` 200; `curl` against
+  `GET /api/discovery/feed` with no `Authorization` header, and separately with a
+  garbage bearer token, both returned 401; pagination query params accepted without
+  error on the unauthenticated path. Three standalone Node scripts (run from inside
+  `backend/` so `node_modules` resolved, all deleted before commit per this
+  project's established convention): (1) a pure-function script exercising
+  `discoveryRankingUtils.js` directly (no DB) — 33 checks, all passed, covering:
+  default weights sum to `1.0` and compatibility is heaviest; each signal
+  normalizer's boundary/degenerate cases (distance `null`/`0`/at-cap/beyond-cap/
+  `maxDistanceKm<=0`; trust at every completion/verification combination; activity
+  at "just logged in"/halfway through the 30-day decay/well past it/`null`/invalid
+  date); an end-to-end realistic-fixture comparison confirming a
+  highly-compatible+close+verified+complete+active candidate scores strictly higher
+  than the opposite profile; the specific "missing distance data doesn't crash or
+  unfairly tank a score" requirement (a `null`-distance fixture scored *better* than
+  a known near-the-cap-distance fixture); `setRankingWeights()` validation (rejects
+  a negative weight and an off-sum update, leaving stored weights unchanged on
+  rejection; accepts and applies a valid partial update); sorting a mixed pool by
+  `rankScore` puts the strong fixture first and the weak one last. (2) an HTTP-level
+  script hijacking `require.cache` for `Profile`/`Like`/`Match`/`User`/`Block` with
+  fake in-memory stores (same fake-model-over-real-route-over-real-HTTP pattern this
+  project has used since Task #6) and mounting the REAL `backend/routes/
+  discovery.js` over real HTTP with 3 fixture candidates (close+strong+verified+
+  complete+active; far+weak+unverified+incomplete+dormant; and a third with no
+  resolvable location at all) — 18 checks, all passed, confirming: all 3
+  already-eligible fixtures are returned (ranking never drops an eligible
+  candidate); the close/strong candidate ranks first and the far/weak one ranks
+  last; the no-location candidate is never unfairly tanked to last place
+  (fail-open); each card carries a genuine, non-fabricated `compatibility` field (a
+  disjoint pair scored exactly `0`); `distanceKm` is correctly a small known number
+  vs. exactly `null`; `?page=&limit=` correctly windows the sorted pool
+  (`hasMore: true` mid-pool, `hasMore: false` once exhausted). (3) a second
+  HTTP-level script, same hijacking pattern, for the new admin routes — 10 checks,
+  all passed, confirming `401`/no-auth, `403`/`USER`, `403`/`MODERATOR` (below the
+  route's `ADMIN`+ tier), `200`/`ADMIN`, `400` on a negative weight, `400` on an
+  off-sum update, and that a valid `PATCH` is genuinely applied and visible on a
+  subsequent `GET`. Frontend — `npm run build` clean (no errors, `dist/` produced);
+  `npm run lint` (oxlint) — 0 errors, the same 2 pre-existing
+  `only-export-components` warnings carried forward, no new warnings.
+- **Docs updated:** `docs/API_DOCUMENTATION.md` (Discovery section rewritten with
+  the full two-layer/algorithm/weights/pagination-composition writeup; new Admin
+  section entries for the two ranking-weights routes), `docs/DATABASE_SCHEMA.md`
+  (new `discovery_ranking_config` divergence-note section; `users.lastLoginAt`
+  entry updated to note its reuse; `matches` section's compatibility note extended),
+  `docs/BUSINESS_PLAN.md` (new "Matching & Discovery Ranking" section),
+  `docs/ROADMAP.md` (Phase 12 row updated), `MOCK_FEATURES.md` (new entry —
+  heuristic-not-ML + in-process-not-persisted-config, both honestly scoped),
+  `PROJECT_STATE.md` (full rewrite of "Current Task"/status fields/"Next Exact
+  Task"), this file.
+- **Next task:** No TaskList tool access in this session to confirm the exact next
+  task number — best guess from this project's own tracking docs is Task #16
+  (Profile Boost + Priority Like, V2, no commits/code found anywhere in this repo as
+  of this pass). See `PROJECT_STATE.md`'s "Next Exact Task" for the full caveat and
+  the rest of the still-open V2/production-readiness list.
+
+---
+
 ## 2026-08-18 — Location/age match preferences + advanced discovery filters + Private browsing (Task #14, V2, user-requested)
 
 - **Phase:** Phase 12 — Growth & Engagement Features (`docs/ROADMAP.md`). V2 feature

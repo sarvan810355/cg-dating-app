@@ -12,6 +12,11 @@ const { writeAuditLog } = require('../utils/auditUtils');
 const { REPORT_STATUSES, REPORT_DETAILS_MAX_LENGTH } = require('../constants/safetyOptions');
 const { VERIFICATION_STATUSES } = require('../constants/verificationOptions');
 const { USER_ROLES, ADMIN_ROLES, SUSPEND_ROLES } = require('../constants/adminOptions');
+const {
+  getRankingWeights,
+  setRankingWeights,
+  DEFAULT_RANKING_WEIGHTS,
+} = require('../utils/discoveryRankingUtils');
 
 const router = express.Router();
 
@@ -482,6 +487,64 @@ router.patch('/users/:userId/role', requireRole('SUPER_ADMIN'), async (req, res)
   } catch (err) {
     console.error('Admin change role error:', err);
     return res.status(500).json({ message: 'Something went wrong, please try again' });
+  }
+});
+
+// GET /api/admin/discovery/ranking-weights (role: ADMIN+) — Task #19
+// (weighted discovery ranking, V2, user-requested). Fulfils
+// docs/BUSINESS_PLAN.md's "must remain configurable" expectation for
+// weighted-model tuning: an admin can read the four ranking weights
+// currently in effect (backend/utils/discoveryRankingUtils.js) without
+// reading source code. Gated at the same ADMIN+ tier as suspend/reinstate
+// (SUSPEND_ROLES) — tuning the ranking algorithm is an account/product-wide
+// setting change, not a MODERATOR-level moderation action.
+router.get('/discovery/ranking-weights', requireRole(...SUSPEND_ROLES), async (req, res) => {
+  return res.json({ weights: getRankingWeights(), defaults: DEFAULT_RANKING_WEIGHTS });
+});
+
+// PATCH /api/admin/discovery/ranking-weights (role: ADMIN+) — body is a
+// partial or full `{ compatibility?, distance?, trust?, activity? }`
+// object; only the provided keys change, the rest keep their current value.
+// **Honestly scoped, not silently overstated:** this mutates an in-process
+// object (backend/utils/discoveryRankingUtils.js's module-level
+// `currentRankingWeights`), so it takes effect immediately for every
+// request on this server process, but is NOT persisted to the database — a
+// server restart resets to DEFAULT_RANKING_WEIGHTS. See that file's own
+// top comment for why a full persisted-config collection wasn't built in
+// this pass. Validation (non-negative numbers, weights summing to ~1.0) is
+// enforced by setRankingWeights() itself; an invalid update is rejected
+// with 400 and the stored weights are left completely unchanged.
+router.patch('/discovery/ranking-weights', requireRole(...SUSPEND_ROLES), async (req, res) => {
+  try {
+    const { compatibility, distance, trust, activity } = req.body || {};
+    const partial = {};
+    if (compatibility !== undefined) partial.compatibility = Number(compatibility);
+    if (distance !== undefined) partial.distance = Number(distance);
+    if (trust !== undefined) partial.trust = Number(trust);
+    if (activity !== undefined) partial.activity = Number(activity);
+    if (Object.keys(partial).length === 0) {
+      return res
+        .status(400)
+        .json({ message: 'Provide at least one of: compatibility, distance, trust, activity' });
+    }
+
+    const weights = setRankingWeights(partial);
+
+    await writeAuditLog({
+      actorId: req.user.id,
+      action: 'discovery.ranking_weights_changed',
+      targetUserId: null,
+      details: { weights },
+    });
+
+    return res.json({ weights });
+  } catch (err) {
+    // setRankingWeights() throws a plain Error with a caller-facing message
+    // on invalid input (negative weight, doesn't sum to ~1.0) — surfaced as
+    // 400, same "validation error -> 400 with the thrown message" pattern
+    // already used elsewhere in this file (e.g. the ValidationError catches
+    // above).
+    return res.status(400).json({ message: err.message });
   }
 });
 

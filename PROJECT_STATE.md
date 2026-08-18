@@ -5,15 +5,75 @@ tasks that made up the MVP build. Since then, post-MVP V2 features have been add
 explicit user request: Instagram profile linking (self-reported handle, not OAuth),
 Why-You-Match + Smart Icebreakers (Task #15, deterministic heuristics, not real AI),
 a Referral program / "Invite & Earn" (Task #17), Safe Date mode + Date Planner
-(Task #18), and now Location/age match preferences + advanced discovery filters +
-Private browsing (Task #14 — see "Current Task" below and MOCK_FEATURES.md). Other V2
+(Task #18), Location/age match preferences + advanced discovery filters + Private
+browsing (Task #14), and now a weighted ranking/recommendation algorithm for the
+discovery feed (Task #19 — see "Current Task" below and MOCK_FEATURES.md). Other V2
 work (Boost/Priority Like, etc.) may be in progress concurrently on this branch — check
 `git log` for the true current state rather than trusting this narrative alone.
 Phases 13/14/15 (Testing, full Security Hardening, Deployment) remain cross-cutting
 work not yet started — see "Remaining Features" below and docs/ROADMAP.md.
-Current Task: **V2 feature, user-requested: Task #14 — Location/age match
-preferences + advanced discovery filters + Private browsing**, added 2026-08-18
-("location preference ... jaise other dating apps kaam karte hain"). Persisted
+Current Task: **V2 feature, user-requested: Task #19 — a weighted
+ranking/recommendation algorithm for the discovery feed**, added 2026-08-18
+("hamare dating app ke matching function aur profile suggestion ko algorithm
+samjha kar optimize karo, jaise other dating apps kaam karte hain"). Task #14
+(prior pass, see below) built the ELIGIBILITY layer — a hard MongoDB-query-level
+yes/no gate (bidirectional gender/age, distance cap, dating-intention,
+verified-only, incognito, blocks, already-swiped/matched, suspended) — but the
+feed still returned eligible candidates in plain `createdAt`-desc query order,
+not ranked by predicted mutual interest. This task adds the RANKING layer on
+top, kept structurally distinct from eligibility (ranking only ever reorders
+what eligibility already allowed through — it can never surface an ineligible
+candidate and can never drop an eligible one). New
+`backend/utils/discoveryRankingUtils.js` — a heuristic weighted scorer (NOT a
+real ML model; no training data/ML infra exists in this project, same honest
+pattern as Task #15/#18's other "not real AI" features) —
+`computeRankScore()` blends four signals, each independently normalized to
+0-100 before weighting: **compatibility** (`weight 0.45`, the heaviest — Task
+#15's own `computeCompatibility()` score, reused directly rather than
+re-derived a third time), **distance closeness** (`weight 0.20` — reuses Task
+#14's `geoUtils.js#haversineDistanceKm()`, relative to the caller's own
+`maxDistanceKm` preference; a missing/unresolvable distance gets the neutral
+midpoint `50`, never a penalty — same fail-open philosophy as Task #14's
+distance filter itself), **profile trust/completeness** (`weight 0.20` —
+`profileCompletionPercentage` contributes up to 60 points, `mobileVerified`/
+`photoVerified` each add 20 — a genuine incentive to verify), and **recent
+activity** (`weight 0.15` — `users.lastLoginAt`, the ONLY genuine "last
+active" timestamp anywhere in this codebase, already stamped on every login by
+existing code — decayed linearly from 100 to 0 over 30 days of inactivity;
+deliberately NOT proxied from `profiles.updatedAt`, which only reflects
+content edits, not activity, and no new field/migration was needed). Weights
+sum to `1.0` and are named constants
+(`discoveryRankingUtils.js#DEFAULT_RANKING_WEIGHTS`) that are also genuinely
+**admin-configurable at runtime** — new
+`GET`/`PATCH /api/admin/discovery/ranking-weights` (`backend/routes/admin.js`,
+`ADMIN`+, validated non-negative + sums to ~1.0, audit-logged) — fulfilling
+docs/BUSINESS_PLAN.md's "must remain configurable" expectation for this MVP
+pass; **honestly scoped:** that configuration is an in-process object only,
+not yet persisted to the database (a server restart resets to the shipped
+defaults — see `docs/DATABASE_SCHEMA.md`'s `discovery_ranking_config`
+divergence note for what a real persisted version would need).
+`GET /api/discovery/feed` (`backend/routes/discovery.js`) now fetches a
+bounded pool of already-eligible candidates
+(`RANKING_POOL_SIZE = 150`, `backend/constants/discoveryOptions.js` —
+deliberately NOT the entire eligible user base, for efficiency), applies Task
+#14's distance fail-open filter over that whole pool, computes
+`compatibility` + `rankScore` per pooled candidate (one query each for
+Profile/User data, no N+1), sorts descending by `rankScore`, and only THEN
+applies the `page`/`limit` pagination window over the already-sorted pool —
+so every page for a given "pool draw" is ranked consistently.
+**Response transparency:** each Discovery card now also carries the same
+`compatibility: { score, reasons }` field `GET /api/matches` already
+returns (computed once per candidate either way, so this is free), and
+`frontend/src/pages/Discovery.jsx` shows it via the existing (Task #15)
+`CompatibilityBadge` component plus the single top reason as a small text
+line — deliberately light-touch, ranking itself stays otherwise invisible (no
+score/order shown), matching how real dating apps surface "why" without ever
+showing a raw ranking number. See `docs/API_DOCUMENTATION.md`'s Discovery
+section for the full algorithm/weights/pagination-composition writeup, and
+this file's "Last Successful Test" entry below for the verification detail.
+Before this, Task #14 — Location/age match preferences + advanced discovery
+filters + Private browsing, added 2026-08-18 ("location preference ... jaise
+other dating apps kaam karte hain"). Persisted
 `profiles.preferences` sub-document (`maxDistanceKm`, `minAge`/`maxAge` with a hard
 18-year floor re-enforced at three layers — schema `min`, route validation, and
 `getEffectivePreferences()`'s own floor — `datingIntentions`, `verifiedOnly`) plus
@@ -250,11 +310,12 @@ implemented as deterministic heuristics, and Date Planner is already implemented
 curated heuristic suggestion generator — not the same as a future real-AI "AI Date
 Ideas" — see "Current Task" above), Profile Boost, Priority Like, real Razorpay
 integration, voice/video calling, real Instagram OAuth (all V2 — Referral program,
-Safe Date mode/Date Planner, and now Location/age preferences + advanced filters +
-Private browsing are all implemented, see "Current Task" above; a weighted
-ranking/recommendation algorithm on top of Task #14's eligibility filtering is Task
-#19, the next exact task — see below); CG Connect/Events, advanced Trust Engine, ML
-recommendations, advanced admin
+Safe Date mode/Date Planner, Location/age preferences + advanced filters + Private
+browsing, and now the weighted discovery-ranking algorithm are all implemented, see
+"Current Task" above); CG Connect/Events, advanced Trust Engine, a genuinely
+**learned/trained** ML recommendation model (Task #19's ranking is a documented
+heuristic weighted scorer, not this — see "Current Task" above and MOCK_FEATURES.md),
+advanced admin
 analytics, statewide/national expansion, city-scale SEO pages, Capacitor native wrapper
 (all V3). Also still deferred within already-shipped MVP features (unchanged from
 before this pass, see TODO.md for the full list): unmatch, "who liked you" reveal
@@ -264,7 +325,8 @@ report evidence file upload, automated spam/scam/abuse detection ("Trust Engine"
 `GET /api/admin/audit-logs` (the model/index exist, nothing reads them back yet),
 permanent ban/account-deletion (suspend/reinstate only, reversible). The persisted
 `preferences` sub-document itself (age range/distance/dating-intention/verified-only)
-is no longer on this list — implemented this pass, Task #14.
+and the discovery ranking algorithm are no longer on this list — implemented in Task
+#14 and Task #19 respectively.
 Known Bugs: BUG-001 (P1) — no rate limiting beyond login/signup, no security-headers
 middleware; see BUGS.md and docs/SECURITY_AUDIT.md. No other bugs found in this pass's
 audit/consistency check.
@@ -286,6 +348,56 @@ Chat is text-only. Report evidence is plain strings, no file upload. No
 automated test suite exists in either backend/ or frontend/ (see
 docs/TESTING_STRATEGY.md). BUG-001 (rate limiting/security headers beyond auth) is
 tracked from a prior pass — see above.
+Last Successful Test (Task #19 — weighted discovery ranking algorithm, this pass):
+Backend — `node -e "require('./server.js')"` boots cleanly, no import/syntax errors,
+listens on port 5000; `GET /api/health` 200; `curl` against `GET /api/discovery/feed`
+with no `Authorization` header, and separately with a garbage bearer token, both
+returned 401 (auth gating unaffected by this pass's changes); pagination query params
+(`?page=&limit=`) accepted without error against the unauthenticated 401 path (the
+standing sandbox limitation — no live MongoDB in any of these sandboxes — means the
+full authed+ranked response body itself still can't be curl-exercised end-to-end; see
+"Known Technical Debt"). Three standalone Node scripts (all run from inside `backend/`
+so `node_modules` resolved, all deleted before commit per this project's established
+convention): (1) a pure-function script loading the REAL
+`backend/utils/discoveryRankingUtils.js` directly (no DB) — confirmed the default
+weights sum to exactly `1.0` and compatibility is the heaviest; `computeDistanceScore()`
+returns the documented neutral midpoint for a `null` distance (never a penalty),
+scales linearly from 100 (0km) to 0 (at the caller's own `maxDistanceKm`), and never
+goes negative or throws on a degenerate `maxDistanceKm<=0`; `computeTrustScore()`
+correctly weights completion (max 60) vs. verification (max 40, 20 each); `
+computeActivityScore()` returns 100 for "just logged in", ~50 at the halfway point of
+the 30-day decay window, 0 well past it, and the neutral midpoint (never a penalty)
+for a `null`/invalid `lastLoginAt`; an end-to-end `computeRankScore()` check confirmed
+a realistic highly-compatible + close + verified + complete + recently-active fixture
+scores strictly higher than a poorly-compatible + far + unverified + incomplete +
+dormant one, that an unknown/missing distance never crashes and scores BETTER than a
+known near-the-cap distance (never unfairly tanked by a data gap), and that sorting a
+mixed pool by `rankScore` puts the strong fixture first and the weak one last;
+`setRankingWeights()` validation confirmed to reject a negative weight and a
+weights-sum outside the ~1.0 tolerance (leaving the stored weights unchanged on
+rejection) while accepting and correctly applying a valid partial update — 33 checks,
+all passed. (2) an HTTP-level script hijacking `require.cache` for
+`Profile`/`Like`/`Match`/`User`/`Block` with fake in-memory stores (same
+fake-model-over-real-route-over-real-HTTP pattern this project has used since Task
+#6) and mounting the REAL `backend/routes/discovery.js` over real HTTP with 3 fixture
+candidate profiles (close+strong+verified+complete+active,
+far+weak+unverified+incomplete+dormant, and a third with no resolvable location at
+all) — confirmed all 3 already-eligible fixtures are returned (ranking never drops an
+eligible candidate), the close/strong candidate ranks first and the far/weak one
+ranks last, the no-location candidate is never unfairly tanked to last place
+(fail-open distance), each card carries a genuine non-fabricated `compatibility`
+field (a disjoint pair scored exactly `0`), `distanceKm` is a small known number for
+the close candidate and exactly `null` for the no-location one, and
+`?page=&limit=` pagination correctly windows the already-sorted pool (`hasMore: true`
+mid-pool, `hasMore: false` once exhausted) — 18 checks, all passed. (3) a second
+HTTP-level script for the new admin routes, same hijacking pattern, mounting the REAL
+`backend/routes/admin.js` — confirmed `GET`/`PATCH /api/admin/discovery/ranking-weights`
+401 with no auth, 403 for a plain `USER` and for a `MODERATOR` (below the `ADMIN`+ tier
+this route requires), 200 for `ADMIN`; `PATCH` correctly 400s on a negative weight and
+on weights that don't sum to ~1.0, and a valid `PATCH` is genuinely applied and visible
+on a subsequent `GET` — 10 checks, all passed. Frontend — `npm run build` clean (no
+errors, `dist/` produced); `npm run lint` (oxlint) — 0 errors, the same 2 pre-existing
+`only-export-components` warnings carried forward, no new warnings.
 Last Successful Test (Task #14 — Location/age match preferences + advanced discovery
 filters + Private browsing, this pass): Backend — `node -e "require('./server.js')"`
 boots cleanly with no import/syntax errors, listens on port 5000; `curl` with no
@@ -447,8 +559,20 @@ empty states confirmed present on Discovery, Matches, Chat, NotificationBell, an
 four Admin screens (all funnel through `frontend/src/api.js`'s single `request()`
 helper, which attaches `.status`/`.data` to thrown errors consistently) — no changes
 needed.
+Last Modified Files (Task #19 — weighted discovery ranking algorithm, this pass):
+backend/utils/discoveryRankingUtils.js (new — the scoring function, weights config,
+signal normalizers), backend/routes/discovery.js (GET /feed rewritten to fetch a
+bounded eligible-candidate pool, score+sort it, then paginate over the sorted pool;
+response cards gained a `compatibility` field), backend/constants/discoveryOptions.js
+(new `RANKING_POOL_SIZE`), backend/routes/admin.js (new
+GET/PATCH /api/admin/discovery/ranking-weights, ADMIN+), frontend/src/pages/
+Discovery.jsx (CompatibilityBadge + top-reason line on each card, reusing Task #15's
+existing component), docs/API_DOCUMENTATION.md, docs/DATABASE_SCHEMA.md,
+docs/BUSINESS_PLAN.md, docs/ROADMAP.md, MOCK_FEATURES.md, this file,
+IMPLEMENTATION_PROGRESS.md. No schema/model changes — `users.lastLoginAt` (an
+already-existing field) is reused as-is for the activity signal, no migration needed.
 Last Modified Files (Task #14 — Location/age match preferences + advanced discovery
-filters + Private browsing, this pass): backend/models/Profile.js (new `preferences`
+filters + Private browsing, prior pass): backend/models/Profile.js (new `preferences`
 sub-document, `location`/`locationSource`, `privacySettings.incognito`),
 backend/routes/discovery.js (bidirectional gender + age matching fix, query-param
 overrides, incognito exclusion, distance filtering, `appliedPreferences`/`distanceKm`
@@ -526,11 +650,18 @@ package-lock.json (bcrypt 5.1.1 → 6.0.0, express-rate-limit added), docs/
 SECURITY_AUDIT.md (new), BUGS.md (BUG-001 added), PROJECT_STATE.md (this file),
 IMPLEMENTATION_PROGRESS.md, TODO.md, MOCK_FEATURES.md, README.md, docs/ROADMAP.md (all
 updated to reflect final MVP-complete state — see git log for the exact diff).
-Database Status: `Profile` gained a `preferences` sub-document
+Database Status: **No schema/model changes this pass (Task #19)** — the discovery
+ranking algorithm reuses `users.lastLoginAt` (already existed, stamped on login since
+before this pass) as-is for its recent-activity signal, and computes `rankScore`
+live per request over a bounded pool, never persisting it (same "computed on read,
+never stored" pattern already established for Task #15's `compatibility`). The
+admin-configurable ranking weights are an in-process object, not a database
+document — see `docs/DATABASE_SCHEMA.md`'s `discovery_ranking_config` divergence
+note. Prior pass (Task #14): `Profile` gained a `preferences` sub-document
 (`maxDistanceKm`/`minAge`/`maxAge`/`datingIntentions`/`verifiedOnly`), a `location`
 GeoJSON Point (2dsphere-indexed, reusing the index that already existed but was never
-populated) + `locationSource` enum, and `privacySettings.incognito` this pass (Task
-#14). `SafeDate` collection was added the prior pass (Task #18 —
+populated) + `locationSource` enum, and `privacySettings.incognito`. `SafeDate`
+collection was added the pass before that (Task #18 —
 `backend/models/SafeDate.js`: `user`, optional `match`, free-text `location`,
 `plannedStartAt`/`plannedEndAt`, optional `trustedContactName`/`trustedContactPhone`,
 `status`, `checkedInAt`/`completedAt`/`cancelledAt`, `reminderNotifiedAt`); `User`
@@ -546,29 +677,39 @@ session across this entire project — this remains the top technical-debt item 
 Backend Status: Express + Socket.IO server (same HTTP server) running with auth +
 profile + discovery + matches + notifications + verification + reports + blocks +
 subscription + referrals + safe-dates + date-ideas + admin routes. This pass
-(Task #14) rewrote `GET /api/discovery/feed`'s filtering logic in place (bidirectional
-gender + age matching, distance/verified-only/incognito filtering, query-param
-overrides — no new route added) and extended `PUT /api/profile/me` for the new
-preference/location/privacy fields; every other route unchanged in behavior. Boots
-cleanly; `GET /api/health` confirmed live.
-Frontend Status: This pass (Task #14) added one new screen
-(`DiscoveryPreferences.jsx`) plus a "Use my current location" control in
-`ProfileBuilder.jsx`, a "Search wider" control + distance display in `Discovery.jsx`,
-and one new Settings link — every other screen unchanged in behavior. `npm run
-build`/`npm run lint` both clean (0 errors, same 2 pre-existing warnings carried
-forward).
+(Task #19) rewrote `GET /api/discovery/feed`'s post-filter fetch/pagination logic
+in place (bounded eligible-candidate pool -> score+sort -> paginate over the sorted
+pool; `compatibility` field added to each response card) and added two new admin
+routes (`GET`/`PATCH /api/admin/discovery/ranking-weights`, `ADMIN`+) — no route was
+removed, and Task #14's eligibility-filter query itself was left completely
+untouched. Prior pass (Task #14) rewrote `GET /api/discovery/feed`'s filtering logic
+in place (bidirectional gender + age matching, distance/verified-only/incognito
+filtering, query-param overrides) and extended `PUT /api/profile/me` for the
+preference/location/privacy fields. Boots cleanly; `GET /api/health` confirmed live.
+Frontend Status: This pass (Task #19) added a `CompatibilityBadge` + top-reason line
+to each Discovery card (`Discovery.jsx`, reusing Task #15's existing component,
+driven by the feed response's new `compatibility` field) — no new screen/route.
+Prior pass (Task #14) added one new screen (`DiscoveryPreferences.jsx`) plus a "Use
+my current location" control in `ProfileBuilder.jsx` and a "Search wider" control +
+distance display in `Discovery.jsx`. `npm run build`/`npm run lint` both clean (0
+errors, same 2 pre-existing warnings carried forward).
 Authentication Status: Implemented (signup/login/JWT/me endpoint), now with rate
 limiting on both signup and login and the password hash never selected by default —
 unchanged otherwise.
 AI Status: Why-You-Match and Smart Icebreakers (Task #15) — deterministic,
 server-side profile-comparison heuristics, exposed via `GET /api/matches`
 (`compatibility` field) and `GET /api/matches/:matchId/compatibility`/
-`.../icebreakers`. **Not a real Claude API integration** — no `ANTHROPIC_API_KEY` is
-configured anywhere in this project (see `backend/.env.example`). The Date Planner
-(Task #18, this pass, `GET /api/date-ideas`) is the same story — a curated heuristic
-suggestion generator, not real AI. AI Profile Coach and a real-AI version of "AI Date
-Ideas" remain not started (see docs/ROADMAP.md Phase 11); see MOCK_FEATURES.md for
-the full explanation and what a real upgrade would need.
+`.../icebreakers`, and now also on `GET /api/discovery/feed`'s cards (Task #19, this
+pass — same computed value, reused, not re-derived). **Not a real Claude API
+integration** — no `ANTHROPIC_API_KEY` is configured anywhere in this project (see
+`backend/.env.example`). The Date Planner (Task #18, `GET /api/date-ideas`) is the
+same story — a curated heuristic suggestion generator, not real AI. **Task #19's
+discovery ranking algorithm (this pass) is the same "documented heuristic, not real
+AI/ML" story too** — a weighted sum of normalized signals, not a trained/learned
+model; see docs/ROADMAP.md's "ML-based recommendations" line for the still-not-started
+V3 direction. AI Profile Coach and a real-AI version of "AI Date Ideas" remain not
+started (see docs/ROADMAP.md Phase 11); see MOCK_FEATURES.md for the full explanation
+and what a real upgrade would need.
 Payment Status: Subscription scaffolding implemented — MOCK checkout, not real
 Razorpay yet (unchanged this pass; still explicitly not production-ready as-is, see
 MOCK_FEATURES.md). The Task #17 referral reward (`paymentProvider:
@@ -577,41 +718,37 @@ signup) remains the one non-payment way a `Subscription` row can be created —
 unchanged this pass.
 Admin Status: Implemented — role/accountStatus on User, role-gated /api/admin/* routes
 (dashboard, reports queue, photo-verification queue, suspend/reinstate, SUPER_ADMIN-only
-role change), AuditLog on every mutation, role-gated /admin frontend section (unchanged
-this pass).
+role change, and now — Task #19, this pass — `GET`/`PATCH .../discovery/ranking-weights`,
+`ADMIN`+, in-process only/not yet persisted, see "Database Status" above), AuditLog on
+every mutation, role-gated /admin frontend section (frontend unchanged this pass — no
+admin UI was built for the ranking-weights routes, only the API; an admin can call them
+directly, e.g. via curl/Postman, until a UI is worth adding).
 Deployment Status: Not started (planned: Render/Railway + MongoDB Atlas +
 Vercel/Netlify + Cloudinary — Phase 15, cross-cutting, not yet started).
-Next Exact Task: **Task #19 — a weighted ranking/recommendation algorithm for the
-discovery feed**, per the orchestrating session's task graph (TaskList tool is the
-authority on numbering — check it directly if you have access; #19 is confirmed
-correct as of this pass). Task #14 (this pass) built the *eligibility* layer —
-who is even allowed to see whom, via hard bidirectional gender/age filters plus
-distance/dating-intention/verified-only/incognito filtering — but the feed still
-returns eligible candidates in plain query order (most-recently-active-ish, via
-whatever the underlying `find()`'s natural/index order is), not ranked by predicted
-mutual interest. Task #19 should build a scoring layer on top of Task #14's already-
-eligible candidate set: likely reusing `backend/utils/matchPreferenceUtils.js` (don't
-re-derive the eligibility rules a third time) plus Task #15's existing
-`backend/utils/compatibilityUtils.js#computeCompatibility()` score as one ranking
-signal, alongside others (distance closeness, profile completeness, recent activity,
-verified status) — see docs/ROADMAP.md's V2/V3 "ML recommendations" note for the
-long-term direction, though Task #19 itself is very unlikely to mean a real ML model
-in this project (no training data, no ML infra configured — same
-mocked/heuristic-not-real-AI pattern as Icebreakers/Why-You-Match/Date Planner).
-Also still not done, V2 scope not covered by Task #19: AI Profile Coach, a real-AI
-version of AI Date Ideas (both would need a real Claude API integration — see
-MOCK_FEATURES.md), Profile Boost, Priority Like, real Razorpay integration,
-voice/video calling, real Instagram OAuth — see docs/ROADMAP.md's V2 section. This
-project remains explicitly **not production-ready** as-is regardless of V2 progress —
-see TODO.md's "Before real production launch" section for the concrete MVP-hardening
-list (live MongoDB Atlas connection + testing, real Cloudinary/Firebase/Razorpay/SMS
-provider credentials, real `.env` production secrets, a seeded real `SUPER_ADMIN`
-account, an automated test suite per docs/TESTING_STRATEGY.md, a unique index on
-`User.phone`, HTTPS/hosting setup per docs/ARCHITECTURE.md's Phase 15, and closing
-BUG-001) — that work remains the recommended default focus whenever V2 feature
-requests aren't actively driving the branch, per this project's own MVP-first
-sequencing principle (docs/ROADMAP.md's "Notes on sequencing"), but Task #19 is the
-concretely-requested next step right now.
+Next Exact Task: **Likely Task #16 — Profile Boost + Priority Like** (V2), the next
+item this project's own tracking docs have flagged as "not started" across every
+prior pass (see "Remaining Features" above and docs/ROADMAP.md's V2 section) — but
+this session had no access to the orchestrating session's TaskList tool to confirm
+the exact number, so treat "#16" as an honest best guess from `git log` + this
+file's own history, not a confirmed fact; **check the TaskList tool directly if the
+next session has access to it** before trusting this number. What IS confirmed: as
+of this pass's commit, Task #19 (weighted discovery ranking, this pass) and every
+task listed in "Completed Features"/"Current Task" above are done; Boost/Priority
+Like have no commits anywhere in `git log` and no code anywhere in this repo (grepped
+at the time of writing this pass's notes). Also still not done, V2 scope: AI Profile
+Coach, a real-AI version of AI Date Ideas (both would need a real Claude API
+integration — see MOCK_FEATURES.md), real Razorpay integration, voice/video calling,
+real Instagram OAuth — see docs/ROADMAP.md's V2 section. This project remains
+explicitly **not production-ready** as-is regardless of V2 progress — see TODO.md's
+"Before real production launch" section for the concrete MVP-hardening list (live
+MongoDB Atlas connection + testing, real Cloudinary/Firebase/Razorpay/SMS provider
+credentials, real `.env` production secrets, a seeded real `SUPER_ADMIN` account, an
+automated test suite per docs/TESTING_STRATEGY.md, a unique index on `User.phone`,
+HTTPS/hosting setup per docs/ARCHITECTURE.md's Phase 15, and closing BUG-001) — that
+work remains the recommended default focus whenever V2 feature requests aren't
+actively driving the branch, per this project's own MVP-first sequencing principle
+(docs/ROADMAP.md's "Notes on sequencing"), but absent a further specific user
+request, Boost/Priority Like is the best-guess concrete next V2 item.
 Next Recommended Action: Get a real MongoDB connection (Atlas free tier is enough)
 verified in whatever environment picks this project up next — every DB-dependent
 behavior in this entire codebase (10 feature tasks' worth of indexes, `select: false`

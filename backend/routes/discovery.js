@@ -19,9 +19,12 @@ const {
   MAX_DISTANCE_KM_CAP,
   MAX_AGE_PREF_CAP,
   DEFAULT_MAX_AGE_PREF,
+  RANKING_POOL_SIZE,
 } = require('../constants/discoveryOptions');
 const { getEffectivePreferences, dobRangeForAgeRange } = require('../utils/matchPreferenceUtils');
 const { isWithinDistance } = require('../utils/geoUtils');
+const { computeCompatibility } = require('../utils/compatibilityUtils');
+const { computeRankScore, getRankingWeights } = require('../utils/discoveryRankingUtils');
 
 const router = express.Router();
 
@@ -79,6 +82,16 @@ async function createMatchIfMutual(fromUserId, toUserId) {
 // `?verifiedOnly=` query params (never persisted — "search wider" UX). The
 // legacy ad-hoc `?datingIntention=`/`?city=` query params from Task #4 are
 // preserved unchanged for backward compatibility.
+//
+// TWO DISTINCT LAYERS (Task #19 — weighted ranking, built on top of Task
+// #14's eligibility filtering): (1) ELIGIBILITY — the MongoDB `filter` built
+// below, a hard yes/no gate; a candidate that fails it is never fetched at
+// all. (2) RANKING — backend/utils/discoveryRankingUtils.js's
+// computeRankScore(), applied only to candidates that already passed (1),
+// purely to decide ORDER (compatibility/distance-closeness/profile-trust/
+// recent-activity, weighted). Ranking can never surface an ineligible
+// candidate and can never drop an eligible one — see the pool-fetch comment
+// further down for exactly where each layer runs.
 //
 // CRITICAL correctness rule (Task #14 audit finding — see PROJECT_STATE.md):
 // gender and age matching are both BIDIRECTIONAL. Previously this feed had
@@ -252,15 +265,29 @@ router.get('/feed', requireAuth, async (req, res) => {
         ? { $in: verifiedUserIds, $nin: [...excludedIds] }
         : { $nin: [...excludedIds] };
 
-    // Fetch one extra row to know whether there's a next page without a
-    // separate count query.
-    const candidates = await Profile.find(filter)
-      .sort({ createdAt: -1 })
-      .skip((page - 1) * limit)
-      .limit(limit + 1);
-
-    const hasMore = candidates.length > limit;
-    let pageCandidates = candidates.slice(0, limit);
+    // --- Task #19: bounded candidate pool for ranking. ---
+    // CRITICAL — this is still the same `filter` built above from every one
+    // of Task #14's hard eligibility rules (bidirectional gender/age,
+    // distance cap, dating-intention, verified-only, incognito, blocks,
+    // already-swiped/matched, suspended) — ranking never widens or bypasses
+    // that filter, it only decides the ORDER of what the filter already
+    // allowed through. We deliberately do NOT fetch "everyone" here: only
+    // RANKING_POOL_SIZE already-eligible candidates are pulled per request
+    // (a natural `createdAt`-desc DB order, cheap and indexed) and THAT
+    // bounded set is what gets scored — see
+    // backend/utils/discoveryRankingUtils.js's top comment and
+    // backend/constants/discoveryOptions.js#RANKING_POOL_SIZE. Pagination
+    // (`page`/`limit`) is applied AFTER scoring+sorting, in application
+    // code, not as a second DB query per page — so every page for a given
+    // request session is drawn from (and ranked within) the same pool.
+    // **Known, documented trade-off (same shape as Task #14's distance-page
+    // trade-off below):** once `page * limit` exceeds RANKING_POOL_SIZE,
+    // `hasMore` becomes `false` even if more eligible candidates exist
+    // further into the collection — a "search wider"-style re-request (a
+    // fresh page-1 call, which re-draws a fresh top-RANKING_POOL_SIZE pool)
+    // is the workaround, exactly like the distance-filter trade-off already
+    // documented in docs/API_DOCUMENTATION.md's Discovery section.
+    const pool = await Profile.find(filter).sort({ createdAt: -1 }).limit(RANKING_POOL_SIZE);
 
     // --- Task #14: distance filtering (application layer, not a Mongo geo
     // query — see docs/DATABASE_SCHEMA.md's `preferences` section and
@@ -268,14 +295,13 @@ router.get('/feed', requireAuth, async (req, res) => {
     // *approximate* city-center coordinate rather than a real geocoded one,
     // and this rule must gracefully include (never crash/exclude-by-default)
     // any profile — mine or the candidate's — that has no coordinate at
-    // all yet. This runs AFTER the page's DB-level skip/limit, so a page
-    // can legitimately return fewer than `limit` profiles when
-    // maxDistanceKm meaningfully narrows the pool — see the divergence note
-    // in docs/API_DOCUMENTATION.md's Discovery section; "search wider" via
-    // a larger `?maxDistanceKm=` override is the documented workaround. ---
+    // all yet. This now runs over the whole pool (before ranking/pagination,
+    // not after a DB-level skip/limit as it did pre-Task #19) so the
+    // distance signal below has a real distanceKm for every scored
+    // candidate wherever one is resolvable. ---
     const myCoords = myProfile.location?.coordinates || null;
     const distanceById = new Map();
-    pageCandidates = pageCandidates.filter((p) => {
+    const eligiblePool = pool.filter((p) => {
       const candidateCoords = p.location?.coordinates || null;
       const { withinDistance, distanceKm } = isWithinDistance(
         myCoords,
@@ -286,23 +312,69 @@ router.get('/feed', requireAuth, async (req, res) => {
       return withinDistance;
     });
 
-    // Task #9 — Verification: bulk-fetch verification badges for this
-    // page's candidates in one query rather than N+1, same batching pattern
-    // as backend/routes/matches.js's otherUser profile lookup.
+    // Task #9 — Verification: bulk-fetch verification badges (+ Task #19's
+    // `lastLoginAt` activity signal) for the whole pool in one query rather
+    // than N+1, same batching pattern as backend/routes/matches.js's
+    // otherUser profile lookup.
     const candidateUsers = await User.find({
-      _id: { $in: pageCandidates.map((p) => p.user) },
-    }).select('mobileVerification.status photoVerification.status');
+      _id: { $in: eligiblePool.map((p) => p.user) },
+    }).select('mobileVerification.status photoVerification.status lastLoginAt');
     const userById = new Map(candidateUsers.map((u) => [String(u._id), u]));
 
+    // --- Task #19: score + sort the pool. ---
+    // `computeCompatibility()` is Task #15's existing Why-You-Match scorer,
+    // reused directly (not re-derived) both as the ranking's heaviest signal
+    // AND as the response's own `compatibility` field below — computed
+    // exactly once per candidate either way. See
+    // backend/utils/discoveryRankingUtils.js for the full weighting/
+    // normalization writeup.
+    const now = new Date();
+    const rankingWeights = getRankingWeights();
+    const scoredPool = eligiblePool.map((p) => {
+      const candidateUser = userById.get(String(p.user));
+      const compatibility = computeCompatibility(myProfile, p);
+      const distanceKm = distanceById.has(String(p.user)) ? distanceById.get(String(p.user)) : null;
+      const { rankScore } = computeRankScore(
+        {
+          compatibilityScore: compatibility.score,
+          distanceKm,
+          maxDistanceKm: myEffectivePrefs.maxDistanceKm,
+          profileCompletionPercentage: p.profileCompletionPercentage,
+          mobileVerified: candidateUser?.mobileVerification?.status === 'VERIFIED',
+          photoVerified: candidateUser?.photoVerification?.status === 'VERIFIED',
+          lastLoginAt: candidateUser?.lastLoginAt || null,
+          now,
+        },
+        rankingWeights
+      );
+      return { profile: p, candidateUser, compatibility, distanceKm, rankScore };
+    });
+    // Sort by rankScore descending; `createdAt` desc (the pool's own fetch
+    // order, still present via Array.prototype.sort's stability) breaks ties
+    // deterministically rather than reshuffling equal scores every request.
+    scoredPool.sort((a, b) => b.rankScore - a.rankScore);
+
+    // --- Pagination window over the already-sorted, already-scored pool. ---
+    const windowStart = (page - 1) * limit;
+    const windowSlice = scoredPool.slice(windowStart, windowStart + limit + 1);
+    const hasMore = windowSlice.length > limit;
+    const pageScored = windowSlice.slice(0, limit);
+
     return res.json({
-      profiles: pageCandidates.map((p) => ({
-        ...toPublicProfileJSON(p, userById.get(String(p.user))),
-        // Task #14 — surfaced for both the frontend and Task #19's future
-        // ranking layer; null when either side's coordinates are unknown
-        // (see isWithinDistance() above), never a guessed/fabricated number.
-        distanceKm: distanceById.has(String(p.user))
-          ? distanceById.get(String(p.user))
-          : null,
+      profiles: pageScored.map(({ profile, candidateUser, compatibility, distanceKm }) => ({
+        ...toPublicProfileJSON(profile, candidateUser),
+        // Task #14 — surfaced for the frontend; null when either side's
+        // coordinates are unknown (see isWithinDistance() above), never a
+        // guessed/fabricated number.
+        distanceKm,
+        // Task #19 — response transparency: the same Why-You-Match
+        // `{ score, reasons }` Task #15 already surfaces on Matches, now
+        // also on Discovery cards, since ranking is now driven by it and
+        // computing it here is already-paid-for (see above) — never an
+        // extra query. `reasons` is `[]`/`score` is `0` for a genuine
+        // non-match, never fabricated, same as everywhere else this
+        // function is used (backend/utils/compatibilityUtils.js).
+        compatibility,
       })),
       page,
       hasMore,

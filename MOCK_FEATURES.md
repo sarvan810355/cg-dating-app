@@ -302,6 +302,36 @@ resolved by this pass (this pass was audit/polish/docs, not new feature work —
       logic (deterministic, unit-tested), and the reminder `Notification`
       (a genuine persisted, live-socket-delivered in-app notification once it
       does fire).
+- [ ] **Discovery feed ranking is a heuristic weighted scorer, not a real ML
+      recommendation model — and its admin-configurable weights are in-process
+      only, not yet persisted.** `[NEW, Task #19, V2, user-requested — "matching
+      function aur profile suggestion ko algorithm samjha kar optimize karo, jaise
+      other dating apps kaam karte hain"]`. `backend/utils/discoveryRankingUtils.js`
+      (wired into `GET /api/discovery/feed`, on top of Task #14's already-real
+      eligibility filtering) computes a `rankScore` from four signals — Task #15's
+      `computeCompatibility()` score, distance-closeness, profile completion +
+      verification, and `users.lastLoginAt` recency — each normalized 0-100 and
+      combined via a fixed, documented weighted sum
+      (`{ compatibility: 0.45, distance: 0.2, trust: 0.2, activity: 0.15 }`). This
+      is a real, deterministic, inspectable algorithm — not a placeholder — but it
+      is explicitly NOT a learned/trained ML model: there is no training data, no
+      feature store, no model-serving infrastructure anywhere in this project, and
+      no click-through/swipe-outcome data is fed back into the weights
+      automatically. Same honest "documented heuristic, not real AI" pattern
+      already used for Why-You-Match/Smart Icebreakers/Date Planner. **Separately,**
+      the weights ARE genuinely admin-configurable at runtime
+      (`GET`/`PATCH /api/admin/discovery/ranking-weights`, ADMIN+) — an admin can
+      tune them without a code deploy — but that configuration lives in a
+      module-level in-memory object, not a database document: a server restart
+      silently resets the weights back to the shipped defaults. Wiring a real
+      persisted config would mean: a small one-document `config`/`settings`
+      collection (same shape, `{ compatibility, distance, trust, activity }`),
+      read once at process start and re-read on every `PATCH` — not built in this
+      pass since nothing else in this codebase has a generic app-config collection
+      yet (see `docs/DATABASE_SCHEMA.md`'s `discovery_ranking_config` divergence
+      note). A future real ML upgrade (learning weights/features from actual
+      swipe/match/conversation outcomes) is explicitly V3 scope — see
+      `docs/ROADMAP.md`'s "ML-based recommendations" line.
 - [ ] **Date Planner suggestions are a curated static list, not real AI.** `[NEW,
       Task #18, V2 scope, see docs/ROADMAP.md's Phase 12]`. `GET /api/date-ideas`
       (`backend/routes/dateIdeas.js`, `backend/utils/datePlanUtils.js`) is plain
