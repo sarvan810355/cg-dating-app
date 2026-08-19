@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { VERIFICATION_STATUSES } = require('../constants/verificationOptions');
 const { USER_ROLES, ACCOUNT_STATUSES } = require('../constants/adminOptions');
+const { BADGE_CODES } = require('../constants/badgeOptions');
 
 // Core account/auth record. Profile details (bio, photos, preferences, etc.)
 // live in the separate Profile model.
@@ -79,6 +80,16 @@ const UserSchema = new mongoose.Schema(
       matchNotifications: { type: Boolean, default: true },
       likeNotifications: { type: Boolean, default: true },
       messageNotifications: { type: Boolean, default: true },
+      // Task #20 — Achievements/Badges (V2 scope, see
+      // backend/constants/badgeOptions.js). Same user-toggleable, opt-out
+      // (not opt-in) convention as the three fields above — a badge
+      // notification is still just a notification, and per this feature's
+      // own "respect existing preferences, never bypass them" requirement
+      // it goes through the exact same createNotification()/
+      // PREFERENCE_FIELD_BY_TYPE gate as everything else (see
+      // backend/constants/notificationOptions.js), not a hardcoded
+      // always-on exception.
+      achievementNotifications: { type: Boolean, default: true },
     },
 
     // --- Verification (Task #9 in the internal TaskList; = docs/ROADMAP.md's
@@ -191,6 +202,80 @@ const UserSchema = new mongoose.Schema(
     // remaining balance > 0, this is a second, schema-level backstop. ---
     boostCreditsRemaining: { type: Number, default: 1, min: 0 },
     priorityLikesRemaining: { type: Number, default: 1, min: 0 },
+
+    // --- Achievements/Badges + Weekly Recap (Task #20 — Engagement, V2
+    // scope; see docs/BUSINESS_PLAN.md's Brand personality section and
+    // PROJECT_STATE.md's Current Task entry for why this was built as the
+    // deliberately-NON-manipulative alternative to the original "make it
+    // addictive" request). ---
+    //
+    // **Denormalized array on User, not a new `Achievement`/`Badge`
+    // collection, and not a Profile sub-document either** — the choice this
+    // task explicitly asked to be documented:
+    //   - A whole new collection would need its own model + indexes for
+    //     what is, per user, a handful of small, append-only, never-edited
+    //     rows — the exact same "1:1-with-user, always-fetched-together
+    //     account state" shape already used for notificationPreferences/
+    //     mobileVerification/photoVerification/referralCode/
+    //     boostCreditsRemaining above, none of which got their own
+    //     collection either (see this model's own comments on each).
+    //   - Profile (backend/models/Profile.js) was the other real candidate
+    //     — it already hosts `preferences`/`privacySettings` as
+    //     sub-documents (Task #14) — but badges are earned by ACCOUNT-WIDE
+    //     activity (referrals, mobile verification, login streak) that has
+    //     no dependency on a Profile document existing at all, and several
+    //     of this task's award points (auth.js's login/signup routes,
+    //     verification.js's mobile OTP route) run before/without ever
+    //     touching a Profile. Keeping badges on User means
+    //     backend/utils/badgeUtils.js#checkAndAwardBadges() never has to
+    //     defensively create/upsert a Profile document from an unrelated
+    //     route just to have somewhere to persist an unlock.
+    // `code` deliberately has NO `unique` constraint at the array-element
+    // level (Mongoose doesn't support that natively) — de-duplication (a
+    // badge can only ever be unlocked once) is enforced entirely in
+    // backend/utils/badgeUtils.js#awardBadge(), which always checks
+    // `unlockedBadges.some(b => b.code === code)` before pushing. `_id:
+    // false` — these are simple value rows, not independently
+    // referenced/queried by their own id anywhere.
+    unlockedBadges: {
+      type: [
+        {
+          code: { type: String, enum: BADGE_CODES, required: true },
+          unlockedAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+      _id: false,
+    },
+
+    // --- Login streak (feeds the ACTIVE_STREAK_7 badge above). No prior
+    // streak-tracking field existed anywhere in this codebase (Task #19's
+    // `lastLoginAt` is a point-in-time timestamp, not a streak counter) —
+    // these three fields are new. Updated exactly once per POST
+    // /api/auth/login call, by
+    // backend/utils/badgeUtils.js#updateLoginStreak(): `currentStreakDays`
+    // increments by 1 when the previous `lastStreakDate` was exactly
+    // yesterday (UTC calendar day), resets to 1 on any gap of 2+ days, and
+    // is a no-op (not re-incremented) for a second login on the same UTC
+    // day. `longestStreakDays` is a simple running high-water mark, kept
+    // for a nicer "your best streak" display even after a gap resets
+    // `currentStreakDays` — not currently used by any badge-unlock
+    // condition itself, but cheap to keep and a natural companion stat.
+    currentStreakDays: { type: Number, default: 0, min: 0 },
+    longestStreakDays: { type: Number, default: 0, min: 0 },
+    lastStreakDate: { type: Date, default: null },
+
+    // --- Weekly Recap (Task #20 — see backend/utils/weeklyRecapUtils.js).
+    // The ONLY persisted field this feature needs — the recap's actual
+    // content (likes received/matches made/messages sent) is always
+    // recomputed fresh from Like/Match/Message at read time (GET
+    // /api/recap/weekly), never cached/denormalized, so there is nothing
+    // to keep in sync here. This single timestamp is what "have I already
+    // shown this user their recap recently" is based on — set via PATCH
+    // /api/recap/weekly/seen, the moment the frontend actually displays
+    // it. `null` (never shown yet) is always treated as "due" — see
+    // backend/utils/weeklyRecapUtils.js#isRecapDue().
+    lastRecapShownAt: { type: Date, default: null },
   },
   { timestamps: true }
 );

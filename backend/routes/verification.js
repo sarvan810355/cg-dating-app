@@ -13,6 +13,7 @@ const {
   toOwnVerificationStatusJSON,
 } = require('../utils/verificationUtils');
 const { resolveMockImageUrl } = require('../utils/mockImageUpload');
+const { checkAndAwardBadges } = require('../utils/badgeUtils');
 const { PHONE_RE, OTP_EXPIRY_MINUTES } = require('../constants/verificationOptions');
 
 const router = express.Router();
@@ -148,6 +149,15 @@ router.post('/mobile/verify-otp', requireAuth, async (req, res) => {
     mv.otpHash = null;
     mv.otpExpiresAt = null;
     await user.save();
+
+    // Task #20 — Achievements/Badges (V2 scope): MOBILE_VERIFIED's natural
+    // award point. Isolated try/catch — a badge-check hiccup must never
+    // turn a successful OTP verification into a 500.
+    try {
+      await checkAndAwardBadges(user._id, 'verification', req.app.get('io'));
+    } catch (badgeErr) {
+      console.error('Badge check error (mobile verify):', badgeErr);
+    }
 
     return res.json(toOwnVerificationStatusJSON(user));
   } catch (err) {

@@ -6,6 +6,7 @@ const Match = require('../models/Match');
 const { requireAuth } = require('../middleware/auth');
 const { isParticipant } = require('../utils/matchUtils');
 const { applySafeDateComputation, toSafeDateJSON } = require('../utils/safeDateUtils');
+const { checkAndAwardBadges } = require('../utils/badgeUtils');
 const {
   LOCATION_MAX_LENGTH,
   TRUSTED_CONTACT_NAME_MAX_LENGTH,
@@ -234,6 +235,16 @@ router.patch('/:id/complete', requireAuth, async (req, res) => {
     safeDate.status = 'COMPLETED';
     safeDate.completedAt = new Date();
     await safeDate.save();
+
+    // Task #20 — Achievements/Badges (V2 scope): FIRST_SAFE_DATE_COMPLETED's
+    // natural award point. Isolated try/catch, same "never turn a
+    // successful state change into a 500" pattern as every other badge-check
+    // call site.
+    try {
+      await checkAndAwardBadges(req.user.id, 'safeDate', req.app.get('io'));
+    } catch (badgeErr) {
+      console.error('Badge check error (safe date complete):', badgeErr);
+    }
 
     return res.json({ safeDate: toSafeDateJSON(safeDate, { isOverdue: false, isReminderWindow: false }) });
   } catch (err) {

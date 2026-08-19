@@ -61,7 +61,11 @@ Base path: `/api/auth`
     account still gets the generic `401` above — a suspended account's status is never
     leaked to someone who doesn't actually know the password.
   - `500` — unexpected server error
-- **Notes:** updates `user.lastLoginAt` on success (not on a `403` suspension block).
+- **Notes:** updates `user.lastLoginAt` on success (not on a `403` suspension
+  block). `[NEW, Task #20, V2, user-requested]` also updates the login
+  streak (`users.currentStreakDays`/`longestStreakDays`/`lastStreakDate`)
+  and — if this login crosses the 7-day threshold — awards the
+  `ACTIVE_STREAK_7` badge. See §16.
 
 ### `GET /api/auth/me`
 - **Auth:** required — `Authorization: Bearer <JWT>` header, verified by the
@@ -1009,7 +1013,7 @@ in-app-only implementation.
     "notifications": [
       {
         "id": "...",
-        "type": "match" | "like" | "message" | "verification" | "safety" | "subscription",
+        "type": "match" | "like" | "message" | "badge" | "verification" | "safety" | "subscription",
         "payload": { "matchId": "...", "fromUserId": "...", "fromUserName": "..." },
         "read": false,
         "createdAt": "..."
@@ -1024,7 +1028,9 @@ in-app-only implementation.
   notifications always have `payload: {}` — no identifying fields, since
   "see who liked you" is a premium-gated reveal (see
   `docs/BUSINESS_PLAN.md`); the frontend renders a generic "Someone liked
-  your profile" message from `type` alone.
+  your profile" message from `type` alone. `badge` (§16, Task #20, V2,
+  user-requested) is celebratory-only — payload `{ code, label,
+  description, icon }`.
 - **Errors:** `401`; `500`.
 
 ### `GET /api/notifications/unread-count`
@@ -1050,14 +1056,16 @@ in-app-only implementation.
   predates this field or has never customized it.
 - **Success response:** `200 OK` —
   ```json
-  { "preferences": { "matchNotifications": true, "likeNotifications": true, "messageNotifications": true } }
+  { "preferences": { "matchNotifications": true, "likeNotifications": true, "messageNotifications": true, "achievementNotifications": true } }
   ```
+  `achievementNotifications` (§16, Task #20, V2, user-requested) gates
+  `badge` notifications.
 - **Errors:** `401`; `500`.
 
 ### `PUT /api/notifications/preferences`
 - **Request body (all optional, partial update):**
   ```json
-  { "matchNotifications": true, "likeNotifications": false, "messageNotifications": true }
+  { "matchNotifications": true, "likeNotifications": false, "messageNotifications": true, "achievementNotifications": false }
   ```
 - **Validation:** any provided field must be a boolean; unknown fields are
   silently ignored. There is deliberately no field here to disable
@@ -1832,3 +1840,183 @@ there's nothing left for the priority flag to add).
   to go through the mock (no real payment collected) subscribe flow to get
   plan-granted top-ups.
 - **Errors:** `400` — `budget`/`activityType` not one of the allowed values; `401`; `500`.
+
+## 16. Achievements/Badges + Weekly Recap — `[IMPLEMENTED, Task #20, V2, user-requested, added 2026-08-19]`
+
+**Product context, not just an implementation note:** the user's original ask
+for this pass was for something "addictive". Per §BUSINESS_PLAN.md's Brand
+personality section ("explicitly not cheap, spammy, or manipulative — no
+fake urgency, no dark patterns"), this pass was built instead as the
+**healthy, non-manipulative alternative**: badges celebrate genuine,
+already-real milestones (a real match, a real completed Safe Date, a real
+referral, a real 7-day return habit); the Weekly Recap reports genuine
+activity, framed positively/neutrally only. There is no streak-breaking
+guilt copy, no "you're about to lose your streak!" urgency, no variable/
+random reward (every badge's unlock condition is a fixed, disclosed
+threshold — never a slot-machine chance), no badge is ever revoked once
+earned, and the recap never says "you missed X". See `PROJECT_STATE.md`'s
+Current Task entry and `IMPLEMENTATION_PROGRESS.md`'s newest entry for the
+full reasoning.
+
+### `GET /api/badges`
+Protected. Returns the full badge catalog (10 entries, kept deliberately
+small — see `backend/constants/badgeOptions.js`), which ones the caller has
+unlocked (+ when), and a cheap progress hint for the still-locked ones where
+one is meaningfully computable.
+```json
+{
+  "badges": [
+    {
+      "code": "MATCHES_10",
+      "label": "10 Matches",
+      "description": "You've matched with 10 people.",
+      "icon": "🌟",
+      "unlocked": false,
+      "unlockedAt": null,
+      "progress": { "current": 7, "target": 10 }
+    },
+    {
+      "code": "FIRST_MATCH",
+      "label": "First Match",
+      "description": "You made your first match!",
+      "icon": "💛",
+      "unlocked": true,
+      "unlockedAt": "2026-08-15T10:00:00.000Z",
+      "progress": null
+    }
+  ],
+  "unlockedCount": 3,
+  "totalCount": 10
+}
+```
+`progress` is `null` for a binary-condition badge (verification badges,
+`FIRST_MATCH`/`FIRST_REFERRAL`/`FIRST_SAFE_DATE_COMPLETED`) and for any
+already-unlocked badge — never a fabricated fraction. Computed via a
+handful of already-established indexed count queries (`Match`/
+`User(referredBy)`/`SafeDate`), not an aggregation pipeline.
+- **Errors:** `401`; `404` (user not found); `500`.
+
+### Badge catalog
+`PROFILE_COMPLETE` (100% profile completion), `MOBILE_VERIFIED`,
+`PHOTO_VERIFIED`, `FIRST_MATCH`, `MATCHES_10`, `MATCHES_50`,
+`FIRST_SAFE_DATE_COMPLETED`, `FIRST_REFERRAL`, `REFERRALS_5`,
+`ACTIVE_STREAK_7` (7 consecutive UTC calendar days with a login).
+
+### Detection — hooked inline, NOT a scheduled/batch job
+No job scheduler exists anywhere in this codebase (same established
+limitation as §14's Safe Date read-time reminder and §15's Boost expiry) —
+`backend/utils/badgeUtils.js#checkAndAwardBadges(userId, trigger, io)` is
+called inline, isolated in its own try/catch (a badge-check hiccup can never
+turn an otherwise-successful request into a `500`), from the exact routes
+where each underlying event already happens:
+- `POST /api/discovery/swipe` (§3) — on a mutual match, for **both**
+  participants (`match` trigger: `FIRST_MATCH`/`MATCHES_10`/`MATCHES_50`).
+- `POST /api/verification/mobile/verify-otp` (§6) — self-service mobile
+  verification (`verification` trigger: `MOBILE_VERIFIED`).
+- `PATCH /api/admin/verifications/photo/:userId` (§11), on a `VERIFIED`
+  approval only — **divergence from a "verification.js" hook point**: photo
+  verification is actually approved in `admin.js`, not self-service, since
+  it requires a MODERATOR+'s manual review (`verification` trigger:
+  `PHOTO_VERIFIED`).
+- `PATCH /api/safe-dates/:id/complete` (§14) — (`safeDate` trigger:
+  `FIRST_SAFE_DATE_COMPLETED`).
+- `POST /api/auth/signup` (§1/§13), on a successful referral grant, checked
+  on the **referrer** (`referral` trigger: `FIRST_REFERRAL`/`REFERRALS_5`).
+- `POST /api/auth/login` (§1), after the login-streak update (`streak`
+  trigger: `ACTIVE_STREAK_7`) — see "Login streak" below.
+- `PUT /api/profile/me` (§2), when the just-saved
+  `profileCompletionPercentage` reaches 100 (`profile` trigger:
+  `PROFILE_COMPLETE`).
+
+Each `trigger` only re-checks the badge condition(s) relevant to it (e.g.
+`match` runs one indexed `Match.countDocuments()`) — never "re-check all 10
+badges on every call". Awarding is idempotent by construction — a badge
+already present in `users.unlockedBadges` is never re-awarded or
+re-notified, even across repeat calls at the same or a higher count.
+
+### Login streak
+`POST /api/auth/login` (§1) now also calls
+`backend/utils/badgeUtils.js#updateLoginStreak()` before saving, alongside
+the existing `lastLoginAt` stamp, in the same write:
+- Same UTC calendar day as `users.lastStreakDate` → no-op (a second login in
+  one day doesn't inflate the streak).
+- Exactly the next UTC calendar day → `currentStreakDays += 1`.
+- Any bigger gap (or no prior streak at all) → `currentStreakDays = 1`,
+  silently — no "you lost your streak!" notification or copy exists
+  anywhere in this codebase.
+`longestStreakDays` is a simple running high-water mark, not itself a badge
+condition.
+
+### Badge notification — respects existing notification preferences
+Awarding a badge creates exactly one in-app `Notification`
+(`type: 'badge'`, payload `{ code, label, description, icon }`), reusing
+§8's existing system end to end — including its preference gate. `'badge'`
+maps to a new, genuinely user-toggleable
+`users.notificationPreferences.achievementNotifications` field (default
+`true`, `PUT /api/notifications/preferences` accepts it exactly like
+`matchNotifications`/`likeNotifications`/`messageNotifications`) — **never a
+hardcoded always-on exception**, per this task's explicit "respect existing
+preferences" requirement. Copy is celebratory only, e.g. *"✨ You unlocked
+the 'Profile Complete' badge!"*.
+
+### Frontend — the "celebratory unlock moment"
+Reuses the existing live notification flow rather than a new real-time
+mechanism, per the task spec: `frontend/src/context/NotificationContext.jsx`
+already listens for the `notification:new` Socket.IO event (§8); when a
+freshly-arrived notification has `type: 'badge'`, it's also surfaced as a
+small, auto-dismissing toast (`frontend/src/components/NotificationBell.jsx`,
+~6s auto-dismiss, tap-to-view routes to `/badges`) — deliberately
+un-animated beyond a plain appear/disappear ("don't over-animate"). A
+dedicated `frontend/src/pages/Badges.jsx` (linked from Settings and
+Dashboard) lists the full catalog, unlocked-first, each locked entry showing
+its progress hint where one exists.
+
+## 17. Weekly Recap — `[IMPLEMENTED, Task #20, V2, user-requested, added 2026-08-19]`
+
+Computed at **READ time**, never scheduled/cached — same honest,
+already-established pattern as §14's Safe Date read-time reminder. No real
+push/email delivery — see `MOCK_FEATURES.md`.
+
+### `GET /api/recap/weekly`
+Protected. Counts the caller's own last-7-days activity fresh on every call
+(three independent, already-indexed count queries — no aggregation
+pipeline) and reports whether it's due to be shown.
+```json
+{
+  "likesReceived": 12,
+  "matchesMade": 3,
+  "messagesSent": 8,
+  "windowStart": "2026-08-12T12:00:00.000Z",
+  "windowEnd": "2026-08-19T12:00:00.000Z",
+  "isNew": true,
+  "lastShownAt": "2026-08-10T09:00:00.000Z"
+}
+```
+- `likesReceived` — `Like` documents with `toUser: <me>`, `action: 'like'`
+  (a `'pass'` never counts) in the trailing 7 days.
+- `matchesMade` — `Match` documents with `<me>` as a participant,
+  `unmatched: false`, `matchedAt` in the trailing 7 days.
+- `messagesSent` — `Message` documents with `sender: <me>` (not received —
+  a measure of the caller's own engagement) in the trailing 7 days.
+- `isNew` — `true` if `users.lastRecapShownAt` is `null`, or at least 7 days
+  have passed since it was last set. A threshold on a real, honestly-tracked
+  timestamp, not a countdown/urgency mechanic.
+- **Errors:** `401`; `404` (user not found); `500`.
+
+### `PATCH /api/recap/weekly/seen`
+Protected. Sets `users.lastRecapShownAt = now`. Called by the frontend the
+moment it actually **displays** the recap card (not on dismiss — dismissing
+just hides the already-shown card locally; either way the next `isNew`
+won't be `true` again for another 7 days). Idempotent.
+```json
+{ "lastShownAt": "2026-08-19T12:03:00.000Z" }
+```
+- **Errors:** `401`; `404`; `500`.
+
+### Frontend
+`Dashboard.jsx` fetches `GET /api/recap/weekly` on load; only when `isNew`
+is `true`, it shows a dismissible, non-blocking "Your Week" card and
+immediately calls `PATCH .../seen`. Framed positively/neutrally only —
+*"12 people liked your profile, 3 new matches, and 8 messages sent this
+week."* — **never** loss/guilt framing ("you missed X"), per this task's
+shared non-manipulative design intent (see §16 above).

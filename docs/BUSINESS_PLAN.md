@@ -132,6 +132,39 @@ weighted scorer, same honest pattern as Why-You-Match/Smart Icebreakers/Date Pla
   explicitly **not** cheap, spammy, or manipulative (e.g. no fake urgency, no dark
   patterns around payments or "who liked you" reveals).
 
+## Engagement & Retention
+
+**`[IMPLEMENTED, Task #20, V2, user-requested, added 2026-08-19]`** The
+user's original ask for this pass was for something "addictive". Per this
+document's own Brand personality line above ("explicitly not cheap, spammy,
+or manipulative — no fake urgency, no dark patterns") and this project's
+long-standing trust-first positioning ("Local + Verified + Compatible +
+Safe + Meaningful"), that request was deliberately reframed and built
+instead as **Achievements/Badges + a Weekly Recap** — healthy retention
+mechanics that celebrate genuine milestones rather than manufacture
+compulsive engagement:
+- **Achievements/Badges** (`GET /api/badges`,
+  `backend/constants/badgeOptions.js`) — 10 fixed, disclosed-threshold
+  badges (profile completion, verification, match milestones, a completed
+  Safe Date, referrals, a 7-day return streak). Every unlock condition is a
+  real, already-earned milestone; there is no variable/random reward
+  (no slot-machine mechanic), no badge is ever revoked, and a login-streak
+  gap resets silently — there is no "you lost your streak!" guilt copy
+  anywhere in this codebase.
+- **Weekly Recap** (`GET /api/recap/weekly`,
+  `backend/utils/weeklyRecapUtils.js`) — an honest, positively/neutrally
+  framed summary of the caller's own last-7-days activity (people who liked
+  them, new matches, messages sent), shown once per week when genuinely due.
+  Never framed as loss/guilt ("you missed X").
+- Every badge notification these mechanics create routes through the exact
+  same user-controllable notification-preference system as every other
+  notification type (see `docs/API_DOCUMENTATION.md`'s §8/§16) — nothing
+  here is a forced, un-disable-able nag.
+
+See `docs/API_DOCUMENTATION.md`'s §16/§17 for the full route contracts and
+`PROJECT_STATE.md`'s Current Task entry for the complete reasoning behind
+this reframing.
+
 ## Success Metrics
 
 The product intentionally does **not** optimize for or headline raw swipe volume.

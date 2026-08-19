@@ -17,6 +17,7 @@ import Referrals from './pages/Referrals';
 import SafeDates from './pages/SafeDates';
 import PlanSafeDate from './pages/PlanSafeDate';
 import DateIdeas from './pages/DateIdeas';
+import Badges from './pages/Badges';
 import AdminDashboard from './pages/AdminDashboard';
 import AdminReports from './pages/AdminReports';
 import AdminVerifications from './pages/AdminVerifications';
@@ -154,6 +155,20 @@ function App() {
         element={
           <ProtectedRoute>
             <DateIdeas />
+          </ProtectedRoute>
+        }
+      />
+      {/* Task #20 — Achievements/Badges + Weekly Recap (V2, user-requested —
+          the deliberately non-manipulative alternative to an original "make
+          it addictive" ask; see docs/BUSINESS_PLAN.md's Brand personality
+          section and PROJECT_STATE.md). The Weekly Recap has no dedicated
+          route — it's a dismissible card on Dashboard.jsx, shown only when
+          due. */}
+      <Route
+        path="/badges"
+        element={
+          <ProtectedRoute>
+            <Badges />
           </ProtectedRoute>
         }
       />

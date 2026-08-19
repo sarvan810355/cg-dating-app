@@ -9,6 +9,7 @@ const Report = require('../models/Report');
 const { requireAuth } = require('../middleware/auth');
 const { requireRole } = require('../middleware/adminAuth');
 const { writeAuditLog } = require('../utils/auditUtils');
+const { checkAndAwardBadges } = require('../utils/badgeUtils');
 const { REPORT_STATUSES, REPORT_DETAILS_MAX_LENGTH } = require('../constants/safetyOptions');
 const { VERIFICATION_STATUSES } = require('../constants/verificationOptions');
 const { USER_ROLES, ADMIN_ROLES, SUSPEND_ROLES } = require('../constants/adminOptions');
@@ -308,6 +309,21 @@ router.patch('/verifications/photo/:userId', requireRole(...ADMIN_ROLES), async 
       targetUserId: user._id,
       details: {},
     });
+
+    // Task #20 — Achievements/Badges (V2 scope): PHOTO_VERIFIED's natural
+    // award point — this is the ONLY place `photoVerification.status`
+    // actually becomes 'VERIFIED' anywhere in this codebase (self-service
+    // submission only sets it to PENDING; see verification.js's POST
+    // /photo/submit). Only checked on an approval, not a rejection.
+    // Isolated try/catch, same "never turn a successful admin action into a
+    // 500" pattern as every other badge-check call site.
+    if (status === 'VERIFIED') {
+      try {
+        await checkAndAwardBadges(user._id, 'verification', req.app.get('io'));
+      } catch (badgeErr) {
+        console.error('Badge check error (photo verification approval):', badgeErr);
+      }
+    }
 
     return res.json({
       userId: user._id,

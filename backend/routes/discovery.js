@@ -10,6 +10,7 @@ const { toPublicProfileJSON } = require('../utils/profileSerializers');
 const { canonicalPair, isMutualLike } = require('../utils/matchUtils');
 const { createNotification } = require('../utils/notificationUtils');
 const { getBlockedUserIds } = require('../utils/blockUtils');
+const { checkAndAwardBadges } = require('../utils/badgeUtils');
 const {
   tryConsumeDailyLike,
   tryConsumePriorityLike,
@@ -572,6 +573,26 @@ router.post('/swipe', requireAuth, async (req, res) => {
     let match = null;
     if (action === 'like') {
       match = await createMatchIfMutual(req.user.id, toUserId);
+    }
+
+    // Task #20 — Achievements/Badges (V2 scope): a mutual match is one of
+    // this feature's natural award points (FIRST_MATCH/MATCHES_10/
+    // MATCHES_50 — see backend/constants/badgeOptions.js). Checked for BOTH
+    // participants — a match is symmetric, either side may be the one
+    // crossing a threshold. Isolated in its own try/catch (badge-checking
+    // must never turn a successful swipe into a 500); each side's badge
+    // notification (if any) is created independently inside
+    // checkAndAwardBadges() itself.
+    if (match) {
+      try {
+        const io = req.app.get('io');
+        await Promise.all([
+          checkAndAwardBadges(req.user.id, 'match', io),
+          checkAndAwardBadges(toUserId, 'match', io),
+        ]);
+      } catch (badgeErr) {
+        console.error('Badge check error (swipe/match):', badgeErr);
+      }
     }
 
     // Notification creation (Task #6, see docs/ROADMAP.md Phase 6).

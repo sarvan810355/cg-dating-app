@@ -21,6 +21,15 @@ export function NotificationProvider({ children }) {
   const [unreadCount, setUnreadCount] = useState(0);
   const [notifications, setNotifications] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  // Task #20 — Achievements/Badges (V2 scope): the "celebratory unlock
+  // moment" the task asks for, built by reusing this already-existing live
+  // notification flow (the 'notification:new' socket event below) rather
+  // than a separate real-time mechanism — see NotificationBell.jsx, which
+  // renders this as a small, auto-dismissing toast. Holds at most the ONE
+  // most recent unseen badge notification; a second badge unlocked in quick
+  // succession simply replaces it rather than queuing (kept deliberately
+  // simple — "don't over-animate", per the task spec).
+  const [celebration, setCelebration] = useState(null);
 
   const refreshUnreadCount = useCallback(async () => {
     try {
@@ -70,6 +79,12 @@ export function NotificationProvider({ children }) {
     function handleNotificationNew(notification) {
       setUnreadCount((count) => count + 1);
       setNotifications((prev) => [notification, ...prev].slice(0, MAX_CACHED_NOTIFICATIONS));
+      // Task #20 — a badge notification also drives the small celebration
+      // toast (see the `celebration` state above) — every other type keeps
+      // behaving exactly as before (bell badge + dropdown list only).
+      if (notification.type === 'badge') {
+        setCelebration(notification);
+      }
     }
 
     socket.on('notification:new', handleNotificationNew);
@@ -111,6 +126,8 @@ export function NotificationProvider({ children }) {
     }
   }, []);
 
+  const dismissCelebration = useCallback(() => setCelebration(null), []);
+
   const value = {
     unreadCount,
     notifications,
@@ -119,6 +136,8 @@ export function NotificationProvider({ children }) {
     refreshUnreadCount,
     markRead,
     markAllRead,
+    celebration,
+    dismissCelebration,
   };
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>;

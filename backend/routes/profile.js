@@ -26,6 +26,7 @@ const {
   MAX_AGE_PREF_CAP,
 } = require('../constants/discoveryOptions');
 const { resolveApproxCoordinates } = require('../utils/geoUtils');
+const { checkAndAwardBadges } = require('../utils/badgeUtils');
 
 const router = express.Router();
 
@@ -462,6 +463,20 @@ router.put('/me', requireAuth, async (req, res) => {
     }
 
     await profile.save();
+
+    // Task #20 — Achievements/Badges (V2 scope): PROFILE_COMPLETE's natural
+    // award point — `profileCompletionPercentage` was just recomputed fresh
+    // by the schema's own pre('save') hook (backend/models/Profile.js), so
+    // this always checks the just-saved, authoritative value. Isolated
+    // try/catch, same "never turn a successful save into a 500" pattern as
+    // every other badge-check call site.
+    if (profile.profileCompletionPercentage >= 100) {
+      try {
+        await checkAndAwardBadges(req.user.id, 'profile', req.app.get('io'));
+      } catch (badgeErr) {
+        console.error('Badge check error (profile save):', badgeErr);
+      }
+    }
 
     return res.status(statusCode).json({ profile: toOwnProfileJSON(profile) });
   } catch (err) {

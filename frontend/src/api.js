@@ -435,3 +435,21 @@ export function getBoostStatus() {
 export function activateBoost() {
   return request('/api/boosts/activate', { method: 'POST', auth: true });
 }
+
+// --- Achievements/Badges + Weekly Recap (Task #20, V2, user-requested — see
+// docs/BUSINESS_PLAN.md's Brand personality section: built as the
+// deliberately non-manipulative alternative to an original "make it
+// addictive" request. See backend/constants/badgeOptions.js /
+// backend/utils/weeklyRecapUtils.js.) --------------------------------------
+
+export function getBadges() {
+  return request('/api/badges', { method: 'GET', auth: true });
+}
+
+export function getWeeklyRecap() {
+  return request('/api/recap/weekly', { method: 'GET', auth: true });
+}
+
+export function markWeeklyRecapSeen() {
+  return request('/api/recap/weekly/seen', { method: 'PATCH', auth: true });
+}

@@ -95,6 +95,11 @@ Core account/auth record.
   `GET /api/auth/me` (not just `GET /api/boosts/status`) so the frontend's
   `AuthContext` carries the balance everywhere `user` is already in scope —
   see `docs/API_DOCUMENTATION.md`'s Boost section.
+- `unlockedBadges`, `currentStreakDays`, `longestStreakDays`, `lastStreakDate`,
+  `lastRecapShownAt` — `[IMPLEMENTED, Task #20, V2, user-requested, added
+  2026-08-19]` Achievements/Badges + Weekly Recap — see the `badges` section
+  below for the full writeup, including why this landed on `users` rather
+  than a new collection or a `profiles` sub-document.
 - `createdAt`, `updatedAt`, `lastLoginAt` — stamped on every successful
   `POST /api/auth/login` (`backend/routes/auth.js`). **`[REUSED, Task #19,
   V2, user-requested]`** — this is also the ONLY genuine "last active"
@@ -457,14 +462,16 @@ Implemented in `backend/models/Notification.js`; routes in
 `backend/utils/notificationUtils.js#createNotification()` helper.
 - `_id`, `recipient` (ref `users`, indexed — **not** `userId`, matches this
   codebase's `ref`-naming convention already used by `Like.fromUser`/
-  `Match.userA` etc.), `type` — enum: `match`, `like`, `message`,
+  `Match.userA` etc.), `type` — enum: `match`, `like`, `message`, `badge`,
   `verification`, `safety`, `subscription` (lowercase, matching the
   `datingIntention`/`action` enum style already used elsewhere in this
   codebase, rather than the originally-drafted `LIKE`/`MATCH`/`MESSAGE`/
-  `SYSTEM`). Only `match`, `like`, and `message` have any code path that
-  creates them in this pass — `verification`/`safety`/`subscription` are
-  reserved for later phases (Task #7+) so the schema won't need to change
-  when those land.
+  `SYSTEM`). `match`, `like`, `message`, and (as of Task #20, V2,
+  user-requested, added 2026-08-19) `badge` have a real code path that
+  creates them — `badge`: a new badge was just unlocked, see the `badges`
+  section above and `backend/utils/badgeUtils.js#awardBadge()`.
+  `verification`/`safety`/`subscription` remain reserved for later phases
+  (Task #7+) so the schema won't need to change when those land.
   **Divergence:** `SYSTEM` was dropped in favor of the more specific
   `verification`/`safety`/`subscription` values, which better match this
   product's actual planned notification sources per `docs/ROADMAP.md`.
@@ -482,6 +489,11 @@ Implemented in `backend/models/Notification.js`; routes in
     for premium users can be layered on without changing this shape.
   - `message`: `{ matchId, fromUserId, fromUserName, messageId, preview }`
     — `preview` is the message text truncated to 140 chars.
+  - `badge`: `{ code, label, description, icon }` — `[IMPLEMENTED, Task #20,
+    V2, user-requested]`, celebratory only (e.g. "You unlocked the Verified
+    badge!"), never guilt/urgency-framed. Gated by a new, genuinely
+    user-toggleable `users.notificationPreferences.achievementNotifications`
+    field (default `true`) — see the `badges` section above.
 - `read` (bool, default `false`) — **field named `read`, not `isRead`** (no
   particular reason beyond matching this codebase's terser boolean-field
   style, e.g. `matches.unmatched`).
@@ -802,6 +814,147 @@ than trusting a cached flag.
 - No new persisted field or collection tracks Priority Like's ranking
   effect — see the `likes` section's `priority` field above and
   `docs/API_DOCUMENTATION.md`'s Boost section.
+
+### `badges` — **not implemented as a separate collection**, `[IMPLEMENTED, Task #20, V2, user-requested, added 2026-08-19]`
+**Product context (why this feature exists at all):** the user's original
+ask for this pass was for something "addictive" — per
+`docs/BUSINESS_PLAN.md`'s Brand personality section ("explicitly not cheap,
+spammy, or manipulative — no fake urgency, no dark patterns"), this was
+built instead as the healthy, non-manipulative alternative: badges celebrate
+genuine, already-real milestones. There is no streak-breaking guilt copy, no
+countdown/urgency framing, and no variable/random reward — every badge's
+unlock condition is a fixed, disclosed threshold (see
+`backend/constants/badgeOptions.js`), and a badge is never revoked once
+earned. See `PROJECT_STATE.md`'s Current Task entry and
+`IMPLEMENTATION_PROGRESS.md`'s newest entry for the full reasoning.
+
+**Divergence from the "consider a `profiles.unlockedBadges` array"
+suggestion this task was scoped with:** implemented as
+`users.unlockedBadges` instead — a `Profile` sub-document, not a new
+collection. Two real candidates were weighed, and the choice (and the
+reasoning) is deliberately documented here rather than assumed:
+- A whole new `Achievement`/`Badge` collection would need its own model +
+  indexes for what is, per user, a handful of small, append-only, never-
+  edited rows — the same "1:1-with-user, always-fetched-together account
+  state" shape already used for `notificationPreferences`/
+  `mobileVerification`/`referralCode`/`boostCreditsRemaining` above, none of
+  which got their own collection either.
+- `profiles.unlockedBadges` (the task's own suggested shape) was the other
+  real candidate — `profiles.preferences`/`privacySettings` already
+  established the "sub-document array on Profile" pattern (Task #14) — but
+  badges are earned by **account-wide** activity (mobile verification,
+  referrals, login streak) that has no dependency on a `Profile` document
+  existing at all, and several of this task's award points
+  (`backend/routes/auth.js`'s login/signup routes,
+  `backend/routes/verification.js`'s mobile OTP route) run before/without
+  ever touching a `Profile`. Keeping badges on `users` means
+  `backend/utils/badgeUtils.js#checkAndAwardBadges()` never has to
+  defensively create/upsert a `Profile` document from an unrelated route
+  just to have somewhere to persist an unlock.
+
+Implemented as four fields directly on `users` (see the `users` section
+above), plus a small catalog constant, plus a shared checker utility — no
+new model file, no new collection:
+- `users.unlockedBadges` — array of `{ code, unlockedAt }` (`_id: false`,
+  `code` schema-enum-restricted to the fixed catalog — see
+  `backend/constants/badgeOptions.js#BADGE_CODES`). De-duplication (a badge
+  can only ever be unlocked once) is enforced in application code
+  (`backend/utils/badgeUtils.js#awardBadge()` always checks
+  `unlockedBadges.some(b => b.code === code)` before pushing), not a schema-
+  level unique constraint (Mongoose doesn't support one on array elements
+  natively).
+- `users.currentStreakDays`, `users.longestStreakDays`,
+  `users.lastStreakDate` — login-streak tracking, feeds the
+  `ACTIVE_STREAK_7` badge. No prior streak-tracking field existed anywhere
+  in this codebase (Task #19's `users.lastLoginAt` is a point-in-time
+  timestamp, not a streak counter). Updated exactly once per `POST
+  /api/auth/login`, by `backend/utils/badgeUtils.js#updateLoginStreak()`:
+  same UTC calendar day as `lastStreakDate` → no-op; exactly the next UTC
+  day → `currentStreakDays += 1`; any bigger gap (or no prior streak) →
+  reset to `1`, silently — there is deliberately no "you lost your streak!"
+  notification or copy anywhere in this codebase, matching this feature's
+  own non-guilt-based design intent. `longestStreakDays` is a simple running
+  high-water mark for a "your best streak" display, not itself a badge
+  condition.
+- **Badge catalog** (`backend/constants/badgeOptions.js#BADGE_CATALOG`, 10
+  entries — deliberately kept small, this is a light-touch "notice and
+  celebrate" layer, not a full points/leaderboard gamification system):
+  `PROFILE_COMPLETE` (100% profile completion), `MOBILE_VERIFIED`,
+  `PHOTO_VERIFIED`, `FIRST_MATCH`, `MATCHES_10`, `MATCHES_50`,
+  `FIRST_SAFE_DATE_COMPLETED`, `FIRST_REFERRAL`, `REFERRALS_5`,
+  `ACTIVE_STREAK_7`.
+- **Detection — hooked inline at the exact routes where each underlying
+  event already happens, NOT a scheduled/batch job** (no job scheduler
+  exists anywhere in this codebase — same established limitation as
+  SafeDate's read-time reminder computation and Task #16's Boost expiry):
+  `backend/utils/badgeUtils.js#checkAndAwardBadges(userId, trigger, io)` is
+  called, each isolated in its own try/catch so a badge-check hiccup can
+  never turn an otherwise-successful request into a `500`, from:
+  `backend/routes/discovery.js`'s `POST /swipe` (on a mutual match, for BOTH
+  participants — `match` trigger), `backend/routes/verification.js`'s
+  mobile OTP verify AND `backend/routes/admin.js`'s photo-verification
+  approval (`verification` trigger — **divergence from the task's suggested
+  single "verification.js" hook point**: photo verification is actually
+  approved in `admin.js`, not self-service, since it requires a
+  MODERATOR+'s manual review; mobile verification genuinely is self-service
+  in `verification.js`), `backend/routes/safeDates.js`'s `PATCH
+  /:id/complete` (`safeDate` trigger), `backend/routes/auth.js`'s signup
+  route on a successful referral grant (`referral` trigger, checked on the
+  REFERRER) and login route (`streak` trigger, after
+  `updateLoginStreak()`), and `backend/routes/profile.js`'s `PUT /me` when
+  the just-saved `profileCompletionPercentage` reaches 100 (`profile`
+  trigger). Each `trigger` only re-checks the badge condition(s) relevant to
+  it (e.g. `match` only runs one indexed `Match.countDocuments()`) — never
+  "re-check all 10 badges on every call".
+- **Notification on award:** one in-app `Notification` (reusing Task #6's
+  system, new `type: 'badge'` — see `docs/API_DOCUMENTATION.md`'s
+  Notifications section), celebratory copy only (e.g. "You unlocked the
+  Verified badge!"), payload `{ code, label, description, icon }`. **Fully
+  respects the existing per-user notification-preference gate** — `'badge'`
+  is mapped to a new, genuinely user-toggleable
+  `users.notificationPreferences.achievementNotifications` field (default
+  `true`) in `backend/constants/notificationOptions.js#PREFERENCE_FIELD_BY_TYPE`,
+  going through the exact same `createNotification()` gate as every other
+  notification type — never a hardcoded always-on exception.
+- **`GET /api/badges`** (`backend/routes/badges.js`) — the full catalog +
+  which are unlocked (+ when) + a cheap progress hint for the still-locked
+  ones where one is meaningfully computable (`MATCHES_10`/`MATCHES_50`/
+  `REFERRALS_5`/`ACTIVE_STREAK_7`/`PROFILE_COMPLETE` — e.g. `"7/10"`; the
+  five binary-condition badges get no fabricated fraction). A handful of
+  extra already-established indexed count queries (`Match`/`User(referredBy)`/
+  `SafeDate`), not an aggregation pipeline.
+
+### `weekly_recap` — **not implemented as a persisted collection at all**, `[IMPLEMENTED, Task #20, V2, user-requested, added 2026-08-19]`
+**Computed at READ time, never scheduled/cached/denormalized** — same
+honest, already-established pattern as SafeDate's read-time reminder
+computation (`backend/utils/safeDateUtils.js`). There is no job scheduler
+anywhere in this codebase to run a real "every Monday, compute and push
+everyone's recap" job, and no real push/email provider configured to
+deliver one even if there were (see `MOCK_FEATURES.md`). The ONLY persisted
+field this feature needs is `users.lastRecapShownAt` (see the `users`
+section above) — a single timestamp tracking "when was this last actually
+displayed", set by `PATCH /api/recap/weekly/seen` the moment the frontend
+shows the card.
+- `backend/utils/weeklyRecapUtils.js#computeWeeklyRecap(userId, now)` counts,
+  fresh, every call: likes received (`likes` collection, `action: 'like'`
+  only, in the trailing 7 days — `RECAP_WINDOW_DAYS`), matches made
+  (`matches` collection, `unmatched: false`, `matchedAt` in the window), and
+  messages the caller sent (`messages` collection, `sender: userId`,
+  `createdAt` in the window) — three independent, already-indexed count
+  queries, no aggregation pipeline.
+- `isRecapDue(lastRecapShownAt, now)` — `true` if never shown before, or at
+  least `RECAP_DUE_AFTER_DAYS` (7, same as the count window — "your week" is
+  a weekly cadence, not shown on every app open) have passed since it was.
+  This is a threshold on a real, honestly-tracked "last shown" timestamp —
+  not a countdown/urgency mechanic.
+- `GET /api/recap/weekly` (`backend/routes/recap.js`) returns the computed
+  counts plus `isNew` (from `isRecapDue()`); `PATCH /api/recap/weekly/seen`
+  marks it shown. Frontend: `Dashboard.jsx` fetches on load and, only when
+  `isNew`, shows a dismissible (never blocking) "Your Week" card, framed
+  positively/neutrally only ("12 people liked your profile, 3 new matches, 8
+  messages sent this week") — **never loss/guilt framing** ("you missed
+  X"), per this feature's shared non-manipulative design intent (see the
+  `badges` section above).
 
 ### `events`
 (V3 — CG Connect local events)

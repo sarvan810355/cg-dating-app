@@ -26,6 +26,10 @@ function notificationText(n) {
       return `New message from ${n.payload?.fromUserName || 'a match'}${
         n.payload?.preview ? `: "${n.payload.preview}"` : ''
       }`;
+    case 'badge':
+      // Task #20 — Achievements/Badges (V2 scope). Celebratory only —
+      // see backend/constants/badgeOptions.js's top comment.
+      return `${n.payload?.icon || '🏅'} You unlocked the "${n.payload?.label || 'badge'}"!`;
     case 'verification':
       return 'An update on your verification status';
     case 'safety':
@@ -49,6 +53,9 @@ function notificationTarget(n) {
   if (n.type === 'like') {
     return '/discover';
   }
+  if (n.type === 'badge') {
+    return '/badges';
+  }
   return null;
 }
 
@@ -66,12 +73,36 @@ function timeAgo(dateString) {
 // Bell icon + unread badge + dropdown notification list — see
 // docs/DESIGN_SYSTEM.md's component list (Badge, EmptyState). Dropped into
 // the main nav of Dashboard/Discovery/Matches (see those pages).
+// How long the badge-unlock celebration toast (Task #20) stays visible
+// before auto-dismissing — a short, un-intrusive moment, not a persistent
+// banner the user has to actively clear. "Don't over-animate" per the task
+// spec: a plain fade-in via a CSS transition class, nothing more elaborate.
+const CELEBRATION_AUTO_DISMISS_MS = 6000;
+
 function NotificationBell() {
-  const { unreadCount, notifications, loaded, refreshNotifications, markRead, markAllRead } =
-    useNotifications();
+  const {
+    unreadCount,
+    notifications,
+    loaded,
+    refreshNotifications,
+    markRead,
+    markAllRead,
+    celebration,
+    dismissCelebration,
+  } = useNotifications();
   const [open, setOpen] = useState(false);
   const containerRef = useRef(null);
   const navigate = useNavigate();
+
+  // Task #20 — Achievements/Badges: auto-dismiss the celebration toast after
+  // a short delay. Re-runs whenever a NEW celebration arrives (keyed by id)
+  // so a second badge unlocked shortly after the first gets its own full
+  // timer rather than inheriting whatever was left of the first one's.
+  useEffect(() => {
+    if (!celebration) return undefined;
+    const timer = setTimeout(() => dismissCelebration(), CELEBRATION_AUTO_DISMISS_MS);
+    return () => clearTimeout(timer);
+  }, [celebration, dismissCelebration]);
 
   useEffect(() => {
     if (open && !loaded) {
@@ -97,8 +128,57 @@ function NotificationBell() {
     if (target) navigate(target);
   }
 
+  function handleCelebrationClick() {
+    dismissCelebration();
+    navigate('/badges');
+  }
+
   return (
     <div className="relative" ref={containerRef}>
+      {/* Task #20 — Achievements/Badges: the celebratory unlock toast.
+          Fixed to the top of the viewport so it's visible regardless of
+          scroll position or whether the notification dropdown is open —
+          purely additive UI, never blocking (no backdrop, doesn't stop
+          interaction with the rest of the page). */}
+      {celebration && (
+        <div
+          role="status"
+          className="fixed left-1/2 top-4 z-50 w-[calc(100vw-2rem)] max-w-sm -translate-x-1/2"
+        >
+          <button
+            type="button"
+            onClick={handleCelebrationClick}
+            className="flex w-full items-center gap-3 rounded-xl border border-primary/30 bg-surface px-4 py-3 text-left shadow-lg transition hover:bg-primary-subtle"
+          >
+            <span className="text-2xl" aria-hidden="true">
+              {celebration.payload?.icon || '🏅'}
+            </span>
+            <span className="flex-1 text-sm">
+              <span className="block font-semibold text-text-primary">
+                Badge unlocked: {celebration.payload?.label || 'New badge'}
+              </span>
+              {celebration.payload?.description && (
+                <span className="block text-xs text-text-secondary">
+                  {celebration.payload.description}
+                </span>
+              )}
+            </span>
+            <span
+              role="button"
+              tabIndex={-1}
+              aria-label="Dismiss"
+              onClick={(e) => {
+                e.stopPropagation();
+                dismissCelebration();
+              }}
+              className="shrink-0 text-text-secondary hover:text-text-primary"
+            >
+              ×
+            </span>
+          </button>
+        </div>
+      )}
+
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}

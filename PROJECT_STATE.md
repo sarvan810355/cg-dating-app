@@ -7,13 +7,103 @@ Why-You-Match + Smart Icebreakers (Task #15, deterministic heuristics, not real 
 a Referral program / "Invite & Earn" (Task #17), Safe Date mode + Date Planner
 (Task #18), Location/age match preferences + advanced discovery filters + Private
 browsing (Task #14), a weighted ranking/recommendation algorithm for the
-discovery feed (Task #19), and now Profile Boost + Priority Like (Task #16 — see
-"Current Task" below and MOCK_FEATURES.md). **Task #16 is, as of this pass, the
-last currently-queued item from this user's post-MVP V2 feature-request batch** —
-see "Next Exact Task" below.
+discovery feed (Task #19), Profile Boost + Priority Like (Task #16), and now
+Achievements/Badges + Weekly Recap (Task #20 — see "Current Task" below,
+docs/BUSINESS_PLAN.md's new Engagement & Retention section, and
+MOCK_FEATURES.md). **Task #20 was, per the task instructions this pass was run
+under, a user-requested feature — but with an important constraint the user
+explicitly agreed to: the original ask was for something "addictive"; this pass
+builds the healthy, non-manipulative alternative instead, citing this project's
+own documented "not manipulative — no fake urgency, no dark patterns" brand
+principle (docs/BUSINESS_PLAN.md's Brand personality section) — see "Current
+Task" below for the full reasoning.**
 Phases 13/14/15 (Testing, full Security Hardening, Deployment) remain cross-cutting
 work not yet started — see "Remaining Features" below and docs/ROADMAP.md.
-Current Task: **V2 feature, user-requested: Task #16 — Profile Boost + Priority
+Current Task: **V2 feature, user-requested (reframed): Task #20 — Achievements/
+Badges + Weekly Recap**, added 2026-08-19. **Why this was built at all — the
+non-manipulative-alternative framing, not just an implementation footnote:** the
+user's original ask for this pass was for something "addictive". Per this
+project's own documented trust-first principle — docs/BUSINESS_PLAN.md's Brand
+personality section already stated "explicitly not cheap, spammy, or
+manipulative — no fake urgency, no dark patterns" before this pass ever started —
+this was built instead as the healthy alternative: badges that celebrate genuine,
+already-real milestones, and a weekly activity summary framed positively/
+neutrally only. Concretely, **nothing in this feature uses**: guilt/loss framing
+("you missed X" — the Weekly Recap only ever reports what *did* happen), urgency/
+countdown framing (no "your streak is about to expire!"), or a variable/random
+reward (every badge's unlock condition is a fixed, disclosed threshold in
+`backend/constants/badgeOptions.js` — never a slot-machine chance); a badge, once
+earned, is never revoked, and a login-streak gap resets silently with no guilt
+copy anywhere. **Achievements/Badges:** a denormalized `users.unlockedBadges`
+array (`{ code, unlockedAt }`, schema-enum-restricted codes) — **deliberately NOT
+a new `Achievement` collection, and NOT a `profiles.unlockedBadges` sub-document
+either** (the shape this task was originally scoped with) — see
+docs/DATABASE_SCHEMA.md's `badges` section for the full reasoning: badges are
+earned by account-wide activity (mobile verification, referrals, login streak)
+that has no dependency on a `Profile` document existing at all, and several award
+points (`backend/routes/auth.js`'s login/signup routes,
+`backend/routes/verification.js`'s mobile OTP route) run before/without ever
+touching a `Profile` — keeping badges on `User` avoids `backend/utils/
+badgeUtils.js#checkAndAwardBadges()` ever having to defensively create/upsert a
+Profile from an unrelated route. 10 badges (`backend/constants/badgeOptions.js`
+— `PROFILE_COMPLETE`, `MOBILE_VERIFIED`, `PHOTO_VERIFIED`, `FIRST_MATCH`,
+`MATCHES_10`, `MATCHES_50`, `FIRST_SAFE_DATE_COMPLETED`, `FIRST_REFERRAL`,
+`REFERRALS_5`, `ACTIVE_STREAK_7`), deliberately kept small — a light-touch
+"notice and celebrate" layer, not a full points/leaderboard gamification
+system. **Detection is hooked inline at the exact routes where each underlying
+event already happens** (`backend/utils/badgeUtils.js#checkAndAwardBadges(userId,
+trigger, io)`, a small shared helper, cheap to call inline — no scheduler exists
+anywhere in this codebase, the same established limitation already true of Safe
+Date's read-time reminder and Task #16's Boost expiry): `backend/routes/
+discovery.js`'s `POST /swipe` on a mutual match (both participants),
+`backend/routes/verification.js`'s mobile OTP verify, `backend/routes/admin.js`'s
+photo-verification approval (**divergence from the task's suggested single
+"verification.js" hook** — photo verification is actually approved by a
+MODERATOR+ in `admin.js`, not self-service), `backend/routes/safeDates.js`'s
+`PATCH /:id/complete`, `backend/routes/auth.js`'s signup (referral, checked on
+the referrer) and login (streak) routes, and `backend/routes/profile.js`'s
+`PUT /me` at 100% completion. Each award creates exactly ONE in-app
+`Notification` (`type: 'badge'`, reusing Task #6's system) with celebratory-only
+copy, gated by a new, genuinely user-toggleable
+`users.notificationPreferences.achievementNotifications` field (default `true`)
+— **routes through the exact same preference system as every other notification
+type, never a hardcoded always-on exception**, per this task's explicit "respect
+existing notification preferences" requirement. **Login streak**
+(`users.currentStreakDays`/`longestStreakDays`/`lastStreakDate`, new fields — no
+prior streak-tracking field existed anywhere in this codebase, Task #19's
+`lastLoginAt` is a point-in-time timestamp, not a counter): updated by
+`backend/utils/badgeUtils.js#updateLoginStreak()` on every `POST /api/auth/login`
+— same UTC calendar day as `lastStreakDate` is a no-op, exactly the next UTC day
+increments, any bigger gap resets to `1` silently. **`GET /api/badges`**
+(`backend/routes/badges.js`) returns the full catalog + unlocked/locked status +
+a cheap progress hint for the still-locked, count-based badges (e.g. `"7/10"`)
+where one is meaningfully computable — a handful of already-established indexed
+count queries, not an aggregation pipeline. **Frontend:** new
+`frontend/src/pages/Badges.jsx` (linked from Settings and Dashboard); the
+"celebratory unlock moment" reuses the EXISTING live-notification flow
+(`frontend/src/context/NotificationContext.jsx`'s `notification:new` Socket.IO
+listener) rather than a new real-time mechanism — a `type: 'badge'` notification
+also drives a small, ~6s-auto-dismissing toast in
+`frontend/src/components/NotificationBell.jsx`, deliberately un-animated beyond a
+plain appear/disappear ("don't over-animate", per the task spec). **Weekly
+Recap:** computed at READ time, same honest pattern as Safe Date's reminder
+computation — no scheduler, no real push/email provider configured (see
+MOCK_FEATURES.md). `backend/utils/weeklyRecapUtils.js#computeWeeklyRecap()`
+counts real last-7-days `Like`/`Match`/`Message` activity fresh on every call
+(three independent, already-indexed count queries); `GET /api/recap/weekly`
+returns the counts plus `isNew` (based on `users.lastRecapShownAt`, a genuine
+timestamp, not a countdown/urgency mechanic); `PATCH /api/recap/weekly/seen`
+marks it shown, called by the frontend the moment it's actually displayed.
+`frontend/src/pages/Dashboard.jsx` shows a dismissible, non-blocking "Your Week"
+card only when due, framed positively/neutrally only ("12 people liked your
+profile, 3 new matches, 8 messages sent this week") — **never** "you missed X".
+See docs/API_DOCUMENTATION.md's §16/§17 and docs/DATABASE_SCHEMA.md's `badges`/
+`weekly_recap` sections for the full contract, and this file's "Last Successful
+Test" entry below for the verification detail. **Note on process:** this session
+had no direct access to the orchestrating session's TaskList tool to
+independently re-verify the task graph — same standing limitation already noted
+by every prior pass's "Next Exact Task" entry below.
+Before this, Task #16 — Profile Boost + Priority
 Like**, added 2026-08-18. This pass's implementation was originally started by an
 earlier agent session that crashed on a transient connection error mid-task
 (unrelated to the code itself — its last message correctly diagnosed a
@@ -348,7 +438,14 @@ pass)** — see "Current Task" above for the full writeup; in one line: persiste
 `profiles.preferences`/`profiles.location`/`profiles.privacySettings.incognito`, a
 critical fix making Discovery's gender AND age matching genuinely bidirectional
 (previously zero gender filtering existed), and application-layer distance filtering
-against either real device coordinates or an approximate city-lookup fallback.
+against either real device coordinates or an approximate city-lookup fallback;
+**Achievements/Badges + Weekly Recap (Task #20, this pass)** — see "Current Task"
+above for the full writeup; in one line: the deliberately non-manipulative
+alternative to a user request for "addictive" mechanics — 10 fixed-threshold
+badges (`users.unlockedBadges`) awarded inline at each real milestone's existing
+route, a login streak counter, and a read-time-computed Weekly Recap card, all
+routed through the existing notification-preference system, none of it using
+guilt/urgency/variable-reward framing.
 Features In Progress: None — the MVP (Phases 0-10) is complete. Next work is either V2
 feature scope or the cross-cutting Phases 13-15 (Testing, full Security Hardening,
 Deployment) — see "Next Exact Task" below.
@@ -360,8 +457,9 @@ curated heuristic suggestion generator — not the same as a future real-AI "AI 
 Ideas" — see "Current Task" above), real Razorpay integration, voice/video calling,
 real Instagram OAuth (all V2 — Referral program, Safe Date mode/Date Planner,
 Location/age preferences + advanced filters + Private browsing, the weighted
-discovery-ranking algorithm, and now Profile Boost + Priority Like are all
-implemented, see "Current Task" above); CG Connect/Events, advanced Trust Engine, a genuinely
+discovery-ranking algorithm, Profile Boost + Priority Like, and now
+Achievements/Badges + Weekly Recap are all implemented, see "Current Task"
+above); CG Connect/Events, advanced Trust Engine, a genuinely
 **learned/trained** ML recommendation model (Task #19's ranking is a documented
 heuristic weighted scorer, not this — see "Current Task" above and MOCK_FEATURES.md),
 advanced admin
@@ -396,7 +494,57 @@ Task #14 entry) and runs in application code rather than a native Mongo geo quer
 Chat is text-only. Report evidence is plain strings, no file upload. No
 automated test suite exists in either backend/ or frontend/ (see
 docs/TESTING_STRATEGY.md). BUG-001 (rate limiting/security headers beyond auth) is
-tracked from a prior pass — see above.
+tracked from a prior pass — see above. Weekly Recap (Task #20, this pass) is
+computed at read time, not a scheduled push/email digest — see
+MOCK_FEATURES.md's new entry. Achievements/Badges credit grants (Task #20) are
+one-time-per-milestone by construction (a badge, once unlocked, is permanent —
+there is nothing "recurring" about it to be honestly-scoped the way Task #16's
+credit grants were).
+Last Successful Test (Task #20 — Achievements/Badges + Weekly Recap, this pass):
+Backend — `node -e "require('./server.js')"` boots cleanly, no import/syntax
+errors, listens on port 5000, `GET /api/health` 200; live `curl` with no
+`Authorization` header against every new/extended route (`GET /api/badges`,
+`GET /api/recap/weekly`, `PATCH /api/recap/weekly/seen`, plus `GET /api/auth/me`,
+`POST /api/discovery/swipe`, `PATCH /api/safe-dates/:id/complete`,
+`POST /api/verification/mobile/verify-otp` as a regression check on routes this
+pass added badge-check calls into) all returned `401`. A standalone Node script
+(`backend/__verify_task20.js`, run from inside `backend/` so `node_modules`
+resolved, deleted before commit per this project's established convention) — 61
+checks, all passed, across five parts: (A) pure `updateLoginStreak()` logic —
+first-ever login sets `currentStreakDays=1`, a second login the same UTC day is a
+no-op, consecutive UTC days increment, a UTC-midnight boundary still counts as
+consecutive, a 2+ day gap resets to `1` (silently — no guilt copy), and
+`longestStreakDays` tracks the high-water mark without being reduced by a later
+reset; (B) pure `isRecapDue()` boundary checks (never-shown is due, 6 days ago is
+not due, 8 days ago is due, exactly 7 days ago is due via `>=`); (C) badge catalog
+sanity — 10 entries, unique codes, every entry has label/description/icon, and an
+explicit scan confirming NO catalog copy contains any guilt/urgency/FOMO language
+("hurry", "expires", "limited time", "losing", "streak ends", etc.); (D)
+HTTP-level `checkAndAwardBadges()` over hijacked `require.cache` fakes for
+`User`/`Profile`/`Match`/`SafeDate`/`Notification` (same fake-model-over-real-
+route pattern this project has used since Task #6) — confirmed crossing 1/10/50
+matches awards exactly `FIRST_MATCH`/`MATCHES_10`/`MATCHES_50` once each with NO
+duplicate on a repeat call at the same count (the specific "no duplicate awards
+on repeat calls" ask), verification/referral/safeDate/profile/streak triggers
+each award exactly the right badge at exactly the right threshold and never
+early, an unknown userId returns `[]` rather than throwing, and every badge
+notification's payload/copy was re-scanned for the same forbidden guilt/urgency
+words with zero matches; (E) real-schema `validateSync()` (no DB) confirming
+`unlockedBadges`/`currentStreakDays`/`longestStreakDays`/`lastStreakDate`/
+`lastRecapShownAt` all default correctly, an unknown badge code fails enum
+validation, `notificationPreferences.achievementNotifications` defaults `true`,
+`'badge'` is wired into `NOTIFICATION_TYPES`/`PREFERENCE_FIELD_BY_TYPE`, and
+`isNotificationTypeEnabled()` genuinely respects
+`achievementNotifications: false` — the task's explicit "must respect existing
+notification preferences" requirement, verified directly, not assumed; plus a
+hijacked-model weekly-recap fixture (Likes/Matches/Messages both within and
+outside the 7-day window, including a `'pass'` that must not count as a like, an
+unmatched Match that must not count, and another user's activity that must not
+count) confirming `computeWeeklyRecap()`'s counts are exactly right. Frontend —
+`npm run build` clean (no errors, `dist/` produced, 409.29 kB main bundle);
+`npm run lint` (oxlint) — 0 errors, the same 2 pre-existing
+`only-export-components` warnings carried forward (`AuthContext.jsx`/
+`NotificationContext.jsx`, unrelated to this task), no new warnings.
 Last Successful Test (Task #16 — Profile Boost + Priority Like, this pass, recovered
 after a prior session's transient crash): Backend — `node -e "require('./server.js')"`
 boots cleanly, no import/syntax errors, listens on port 5000; live `curl` against
@@ -652,6 +800,37 @@ empty states confirmed present on Discovery, Matches, Chat, NotificationBell, an
 four Admin screens (all funnel through `frontend/src/api.js`'s single `request()`
 helper, which attaches `.status`/`.data` to thrown errors consistently) — no changes
 needed.
+Last Modified Files (Task #20 — Achievements/Badges + Weekly Recap, this pass):
+backend/constants/badgeOptions.js (new — the 10-badge catalog + thresholds),
+backend/utils/badgeUtils.js (new — checkAndAwardBadges()/awardBadge()/
+updateLoginStreak()), backend/utils/weeklyRecapUtils.js (new —
+computeWeeklyRecap()/isRecapDue()), backend/routes/badges.js (new — GET /),
+backend/routes/recap.js (new — GET /weekly, PATCH /weekly/seen),
+backend/models/User.js (new unlockedBadges/currentStreakDays/
+longestStreakDays/lastStreakDate/lastRecapShownAt fields, new
+notificationPreferences.achievementNotifications field),
+backend/constants/notificationOptions.js ('badge' added to NOTIFICATION_TYPES/
+PREFERENCE_FIELD_BY_TYPE), backend/routes/discovery.js (badge check on mutual
+match), backend/routes/verification.js (badge check on mobile OTP verify),
+backend/routes/admin.js (badge check on photo verification approval),
+backend/routes/safeDates.js (badge check on Safe Date complete),
+backend/routes/auth.js (badge check on referral signup + login streak update/
+badge check), backend/routes/profile.js (badge check on 100% completion),
+backend/server.js (mounts badgesRouter/recapRouter), frontend/src/api.js (new
+getBadges()/getWeeklyRecap()/markWeeklyRecapSeen()), frontend/src/App.jsx (new
+/badges route), frontend/src/pages/Badges.jsx (new — catalog screen),
+frontend/src/pages/Settings.jsx (new Achievements link + achievementNotifications
+preference toggle), frontend/src/pages/Dashboard.jsx (Weekly Recap dismissible
+card + Achievements link), frontend/src/context/NotificationContext.jsx (new
+celebration state, driven by a 'badge'-type notification:new event),
+frontend/src/components/NotificationBell.jsx ('badge' notification text/target +
+the celebratory unlock toast), docs/API_DOCUMENTATION.md (new §16/§17, §1/§8
+extended), docs/DATABASE_SCHEMA.md (new users fields, new badges/weekly_recap
+sections, notifications section extended), docs/BUSINESS_PLAN.md (new Engagement
+& Retention section), MOCK_FEATURES.md, this file, IMPLEMENTATION_PROGRESS.md.
+`backend/__verify_task20.js` (scratch verification script) was written and run
+during this task but deleted before commit per this project's established
+convention.
 Last Modified Files (Task #16 — Profile Boost + Priority Like, this pass, recovered
 after a prior session's transient crash): backend/models/Boost.js (new — one
 document per activation), backend/routes/boosts.js (new — GET /status,
@@ -863,17 +1042,22 @@ new admin route or UI was needed for Boost/Priority Like, since both are entirel
 self-serve, user-facing mechanics with no moderation surface.
 Deployment Status: Not started (planned: Render/Railway + MongoDB Atlas +
 Vercel/Netlify + Cloudinary — Phase 15, cross-cutting, not yet started).
-Next Exact Task: **No further V2 items are currently queued by the user.** Task #16
-(Profile Boost + Priority Like, this pass) was the last item in this user's
-post-MVP V2 feature-request batch — per the task instructions this pass was run
-under (this session, like every prior one, had no direct access to the
-orchestrating session's TaskList tool to independently re-verify the task graph
-itself, so this is stated on the strength of that instruction plus the corroborating
-fact that `git log`/this file's own history show every other named V2 item —
-Instagram linking, Why-You-Match/Icebreakers (#15), Referral program (#17), Safe
-Date/Date Planner (#18), match preferences/advanced filters/private browsing (#14),
-weighted ranking (#19), and now Boost/Priority Like (#16) — already shipped, with
-nothing else named anywhere in this project's docs as "in progress" or "queued").
+Next Exact Task: **No further V2 items are currently queued by the user.** Task #20
+(Achievements/Badges + Weekly Recap, this pass) was the latest item in this user's
+post-MVP V2 feature-request batch, and — per the task instructions this pass was
+run under — was itself a reframing of an "addictive" request into the healthy
+alternative actually built (see "Current Task" above). This session, like every
+prior one, checked for a `TaskList` tool to independently re-verify the task graph
+before setting this section, per this task's own instructions — none was available
+in this session's tool set (confirmed via a tool search, not assumed), so this is
+stated on the strength of the task instructions plus the corroborating fact that
+`git log`/this file's own history show every other named V2 item — Instagram
+linking, Why-You-Match/Icebreakers (#15), Referral program (#17), Safe Date/Date
+Planner (#18), match preferences/advanced filters/private browsing (#14), weighted
+ranking (#19), Boost/Priority Like (#16), and now Achievements/Badges + Weekly
+Recap (#20) — already shipped, with nothing else named anywhere in this project's
+docs as "in progress" or "queued". A future session that DOES have TaskList access
+should treat that tool, not this narrative history, as authoritative.
 **Recommended next focus:** either (a) the "Before real production launch"
 hardening list in TODO.md — live MongoDB Atlas connection + testing, real
 Cloudinary/Firebase/Razorpay/SMS provider credentials, real `.env` production

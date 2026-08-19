@@ -371,6 +371,25 @@ resolved by this pass (this pass was audit/polish/docs, not new feature work —
       payment, a plan's one-time credit grant is likewise handed out for free
       today, same as the subscription it rides on. See
       `docs/API_DOCUMENTATION.md`'s §15 for the full route contract.
+- [ ] **Weekly Recap is computed at READ time, not a scheduled job or a real
+      push/email digest.** `[NEW, Task #20, V2, user-requested, added
+      2026-08-19]`. `GET /api/recap/weekly` (`backend/routes/recap.js`,
+      `backend/utils/weeklyRecapUtils.js`) counts the caller's own last-7-days
+      activity fresh on every call — nothing is pre-aggregated, cached, or
+      pushed to a device. Same standing gap already documented above for Safe
+      Date's reminder computation and Profile Boost's one-time (not
+      recurring) credit grant: there is no background job scheduler anywhere
+      in this codebase (no `node-cron`, no task queue) to run a real "every
+      Monday at 9am, compute and push everyone's recap" job, and no real
+      push/email provider configured to deliver one even if there were. A
+      real implementation would need both a scheduler and a real
+      push/email/SMS provider. **What IS real and non-mocked:** the counts
+      themselves are genuine live queries against `likes`/`matches`/
+      `messages` (never fabricated placeholder numbers), and
+      `users.lastRecapShownAt` genuinely tracks when the recap was last
+      actually displayed (`PATCH /api/recap/weekly/seen`) — a user who checks
+      twice in one session sees the same real numbers, not a stale cache. See
+      `docs/API_DOCUMENTATION.md`'s §17 for the full route contract.
 
 ## Resolved (mocks replaced with real implementations)
 

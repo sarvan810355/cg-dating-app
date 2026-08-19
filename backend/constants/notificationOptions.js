@@ -7,12 +7,22 @@
 // Notification types this MVP pass actually creates: 'match' (mutual match
 // created, see backend/routes/discovery.js), 'like' (someone liked you,
 // before any mutual match — see the same file), 'message' (new chat
-// message, see backend/routes/matches.js). 'verification', 'safety', and
+// message, see backend/routes/matches.js), 'badge' (Task #20 — Achievements/
+// Badges, V2 scope: a new badge was just unlocked, see
+// backend/utils/badgeUtils.js#awardBadge()). 'verification', 'safety', and
 // 'subscription' are reserved enum values for later phases (Task #7+) — no
 // code path creates them yet, but they're included now per
 // docs/DATABASE_SCHEMA.md so the schema doesn't need to change when those
 // phases land.
-const NOTIFICATION_TYPES = ['match', 'like', 'message', 'verification', 'safety', 'subscription'];
+const NOTIFICATION_TYPES = [
+  'match',
+  'like',
+  'message',
+  'badge',
+  'verification',
+  'safety',
+  'subscription',
+];
 
 // Which notification types are user-toggleable via GET/PUT
 // /api/notifications/preferences, and which User.notificationPreferences
@@ -25,6 +35,13 @@ const PREFERENCE_FIELD_BY_TYPE = {
   match: 'matchNotifications',
   like: 'likeNotifications',
   message: 'messageNotifications',
+  // Task #20 — Achievements/Badges (V2 scope). Deliberately still
+  // user-toggleable (not folded into the "always delivered" safety-critical
+  // group below) — a badge unlock is a celebration, not a safety-critical
+  // event, so a user who'd rather not see them can opt out exactly like any
+  // other notification type. See backend/models/User.js's
+  // notificationPreferences.achievementNotifications field.
+  badge: 'achievementNotifications',
 };
 
 // GET /api/notifications pagination defaults — newest-first, same

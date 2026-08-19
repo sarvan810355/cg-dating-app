@@ -32,6 +32,11 @@ const PREFERENCE_ROWS = [
     label: 'Messages',
     description: 'Notify me when I receive a new chat message',
   },
+  {
+    field: 'achievementNotifications',
+    label: 'Achievements',
+    description: 'Notify me when I unlock a new badge',
+  },
 ];
 
 function Toggle({ checked, onChange, disabled, label }) {
@@ -293,6 +298,14 @@ function Settings() {
         <Link to="/date-ideas">
           <Button variant="ghost" className="mt-2 w-full">
             Date Ideas
+          </Button>
+        </Link>
+
+        {/* Task #20 — Achievements/Badges (V2 scope, see
+            docs/BUSINESS_PLAN.md's Brand personality section). */}
+        <Link to="/badges">
+          <Button variant="ghost" className="mt-2 w-full">
+            Achievements
           </Button>
         </Link>
 

@@ -11,6 +11,7 @@ const {
   normalizeReferralCode,
   grantMutualReferralReward,
 } = require('../utils/referralUtils');
+const { checkAndAwardBadges, updateLoginStreak } = require('../utils/badgeUtils');
 
 const router = express.Router();
 
@@ -152,6 +153,16 @@ router.post('/signup', signupLimiter, async (req, res) => {
     // failure never turns a successful signup into an error response.
     if (referrer) {
       await grantMutualReferralReward(referrer._id, user._id);
+      // Task #20 — Achievements/Badges (V2 scope): FIRST_REFERRAL/
+      // REFERRALS_5's natural award point — checked on the REFERRER (the
+      // person whose code was just used), not the new referee. Isolated
+      // try/catch, same "never turn a successful signup into a 500" pattern
+      // as the reward grant above.
+      try {
+        await checkAndAwardBadges(referrer._id, 'referral', req.app.get('io'));
+      } catch (badgeErr) {
+        console.error('Badge check error (referral signup):', badgeErr);
+      }
     }
 
     const token = signToken(user._id);
@@ -200,8 +211,25 @@ router.post('/login', loginLimiter, async (req, res) => {
       });
     }
 
-    user.lastLoginAt = new Date();
+    const loginTime = new Date();
+    user.lastLoginAt = loginTime;
+    // Task #20 — Achievements/Badges (V2 scope): login-streak tracking, the
+    // feed for ACTIVE_STREAK_7. Updated in-memory here and saved together
+    // with `lastLoginAt` in the one `user.save()` call below — see
+    // backend/utils/badgeUtils.js#updateLoginStreak() for the exact
+    // same-day-no-op / next-day-increment / gap-resets-to-1 rules.
+    updateLoginStreak(user, loginTime);
     await user.save();
+
+    // Checked AFTER the save above (needs the just-persisted
+    // currentStreakDays) — isolated try/catch, same "never turn a
+    // successful login into a 500" pattern as every other badge-check call
+    // site.
+    try {
+      await checkAndAwardBadges(user._id, 'streak', req.app.get('io'));
+    } catch (badgeErr) {
+      console.error('Badge check error (login streak):', badgeErr);
+    }
 
     const token = signToken(user._id);
     return res.json({ token, user: toPublicUser(user) });

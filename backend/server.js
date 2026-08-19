@@ -20,6 +20,8 @@ const adminRouter = require('./routes/admin');
 const safeDatesRouter = require('./routes/safeDates');
 const dateIdeasRouter = require('./routes/dateIdeas');
 const boostsRouter = require('./routes/boosts');
+const badgesRouter = require('./routes/badges');
+const recapRouter = require('./routes/recap');
 const { initSocket } = require('./socket');
 const { seedDefaultPlans } = require('./utils/entitlementUtils');
 
@@ -73,6 +75,13 @@ app.use('/api/date-ideas', dateIdeasRouter);
 // existing POST /api/discovery/swipe (backend/routes/discovery.js), not a
 // new base path.
 app.use('/api/boosts', boostsRouter);
+// Task #20 — Achievements/Badges + Weekly Recap (V2, user-requested — see
+// PROJECT_STATE.md's Current Task entry for why this was built as the
+// deliberately non-manipulative alternative to the original "make it
+// addictive" ask). Two independent, unrelated-to-each-other routers, same
+// "mount at the natural base path" convention as everything above.
+app.use('/api/badges', badgesRouter);
+app.use('/api/recap', recapRouter);
 
 app.get('/', (req, res) => {
   res.json({ message: 'CG Dating API' });
