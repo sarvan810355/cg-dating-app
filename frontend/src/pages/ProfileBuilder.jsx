@@ -109,6 +109,20 @@ function TagField({ label, values, onChange, placeholder, max, helperText }) {
   );
 }
 
+// One section per step — keeps the builder feeling like a short guided flow
+// instead of one long form. Purely a presentation split: all steps write
+// into the same `form` state and are saved via the same partial-merge
+// PUT /api/profile/me, so navigating back and forth never loses data.
+const STEPS = [
+  { key: 'basic', title: 'The basics', subtitle: "Let's start with who you are" },
+  { key: 'intention', title: "What are you looking for?", subtitle: 'Be upfront about your intentions' },
+  { key: 'location', title: 'Where are you?', subtitle: 'Helps us find people near you' },
+  { key: 'photos', title: 'Add your photos', subtitle: 'Profiles with photos get more matches' },
+  { key: 'bio', title: 'Bio & interests', subtitle: 'Give people something to talk about' },
+  { key: 'social', title: 'Social (optional)', subtitle: 'Link your Instagram if you like' },
+  { key: 'prompts', title: 'Show your personality', subtitle: 'Answer a prompt or two' },
+];
+
 function ProfileBuilder() {
   const navigate = useNavigate();
   const [form, setForm] = useState(EMPTY_FORM);
@@ -119,6 +133,7 @@ function ProfileBuilder() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [step, setStep] = useState(0);
   const [photoUrlInput, setPhotoUrlInput] = useState('');
   const [photoBusy, setPhotoBusy] = useState(false);
   const [promptChoice, setPromptChoice] = useState(PERSONALITY_PROMPTS[0]);
@@ -217,10 +232,13 @@ function ProfileBuilder() {
     );
   }
 
-  async function handleSubmit(e) {
-    e.preventDefault();
+  // Shared by the "Next" button (saves progress after every step, so
+  // stepping back and forth or leaving mid-way never loses anything) and the
+  // final step's "Finish" button. Returns whether the save succeeded so
+  // callers can decide whether to advance.
+  async function saveProfile({ silent = false } = {}) {
     setError('');
-    setSuccess('');
+    if (!silent) setSuccess('');
 
     // Client-side mirror of backend/routes/profile.js's instagramHandle
     // validation — same regex, same "strip a leading @" normalization —
@@ -230,7 +248,7 @@ function ProfileBuilder() {
       setError(
         'Instagram username must be 1-30 characters using only letters, numbers, periods, and underscores'
       );
-      return;
+      return false;
     }
 
     setSaving(true);
@@ -255,12 +273,44 @@ function ProfileBuilder() {
       setLocationInfo(
         data.profile.location ? { source: data.profile.locationSource, ...data.profile.location } : null
       );
-      setSuccess('Profile saved');
+      if (!silent) setSuccess('Profile saved');
+      return true;
     } catch (err) {
       setError(err.message || 'Could not save your profile');
+      return false;
     } finally {
       setSaving(false);
     }
+  }
+
+  function stepValidationError() {
+    if (STEPS[step].key === 'basic') {
+      if (!form.displayName.trim()) return 'Please enter a display name';
+      if (!form.dateOfBirth) return 'Please enter your date of birth';
+      if (!form.gender) return 'Please select your gender';
+    }
+    return null;
+  }
+
+  async function handleNext() {
+    const validationError = stepValidationError();
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+    const ok = await saveProfile({ silent: true });
+    if (ok) setStep((s) => Math.min(s + 1, STEPS.length - 1));
+  }
+
+  function handleBack() {
+    setError('');
+    setStep((s) => Math.max(s - 1, 0));
+  }
+
+  async function handleFinish(e) {
+    e.preventDefault();
+    const ok = await saveProfile();
+    if (ok) navigate('/dashboard');
   }
 
   async function handleAddPhotoUrl() {
@@ -362,36 +412,46 @@ function ProfileBuilder() {
   const instagramPreviewValid =
     instagramPreviewHandle && INSTAGRAM_HANDLE_REGEX.test(instagramPreviewHandle);
 
+  const isFirstStep = step === 0;
+  const isLastStep = step === STEPS.length - 1;
+  const currentStep = STEPS[step];
+
   return (
     <div className="min-h-screen bg-background px-4 py-8">
-      <div className="mx-auto max-w-2xl">
-        <div className="mb-6 flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-text-primary">Build your profile</h1>
-            <p className="text-sm text-text-secondary">
-              Real people. Real profiles. Real compatibility.
-            </p>
+      <div className="mx-auto max-w-lg">
+        {/* Compact header: small avatar + step dots, no page-length wall of text */}
+        <div className="mb-6 flex items-center gap-4">
+          <Avatar src={photos.find((p) => p.isPrimary)?.url} name={form.displayName} size="md" />
+          <div className="flex-1">
+            <div className="mb-1.5 flex items-center justify-between text-xs font-medium text-text-secondary">
+              <span>
+                Step {step + 1} of {STEPS.length}
+              </span>
+              <span className="text-primary">{completion}% complete</span>
+            </div>
+            <div className="flex gap-1.5">
+              {STEPS.map((s, i) => (
+                <div
+                  key={s.key}
+                  className={`h-1.5 flex-1 rounded-full transition-colors ${
+                    i <= step ? 'bg-primary' : 'bg-primary-subtle'
+                  }`}
+                />
+              ))}
+            </div>
           </div>
-          <Avatar src={photos.find((p) => p.isPrimary)?.url} name={form.displayName} size="lg" />
         </div>
 
-        {/* Profile Strength / completion */}
-        <div className="mb-6 rounded-2xl border border-border bg-surface p-4">
-          <div className="mb-2 flex items-center justify-between text-sm">
-            <span className="font-medium text-text-primary">Profile strength</span>
-            <span className="font-semibold text-primary">{completion}%</span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-primary-subtle">
-            <div
-              className="h-full rounded-full bg-primary transition-all"
-              style={{ width: `${completion}%` }}
-            />
-          </div>
-          {hints.length > 0 && (
-            <p className="mt-2 text-xs text-text-secondary">💡 {hints[0]}</p>
-          )}
+        <div className="mb-5">
+          <h1 className="text-2xl font-bold text-text-primary">{currentStep.title}</h1>
+          <p className="text-sm text-text-secondary">{currentStep.subtitle}</p>
         </div>
 
+        {hints.length > 0 && (
+          <p className="mb-4 rounded-lg bg-primary-subtle px-3 py-2 text-xs text-primary">
+            💡 {hints[0]}
+          </p>
+        )}
         {error && (
           <p className="mb-4 rounded-lg bg-error-subtle px-3 py-2 text-sm text-error">{error}</p>
         )}
@@ -401,11 +461,11 @@ function ProfileBuilder() {
           </p>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-8">
+        <form onSubmit={handleFinish}>
           {/* Basic info */}
-          <section className="rounded-2xl border border-border bg-surface p-5">
-            <h2 className="mb-4 text-lg font-semibold text-text-primary">Basic info</h2>
-            <div className="grid gap-4 sm:grid-cols-2">
+          {currentStep.key === 'basic' && (
+          <section className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
+            <div className="grid gap-4">
               <TextField
                 label="Display name"
                 required
@@ -464,17 +524,18 @@ function ProfileBuilder() {
               </div>
             </div>
           </section>
+          )}
 
           {/* Dating intention */}
-          <section className="rounded-2xl border border-border bg-surface p-5">
-            <h2 className="mb-4 text-lg font-semibold text-text-primary">Dating intention</h2>
-            <div className="grid gap-2 sm:grid-cols-2">
+          {currentStep.key === 'intention' && (
+          <section className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
+            <div className="grid gap-2.5">
               {DATING_INTENTIONS.map((opt) => (
                 <button
                   type="button"
                   key={opt.value}
                   onClick={() => update('datingIntention', opt.value)}
-                  className={`rounded-lg border px-3 py-2 text-left text-sm transition ${
+                  className={`rounded-xl border px-4 py-3 text-left text-sm font-medium transition ${
                     form.datingIntention === opt.value
                       ? 'border-primary bg-primary-subtle text-primary'
                       : 'border-border bg-surface text-text-primary hover:bg-primary-subtle'
@@ -485,11 +546,12 @@ function ProfileBuilder() {
               ))}
             </div>
           </section>
+          )}
 
           {/* Location */}
-          <section className="rounded-2xl border border-border bg-surface p-5">
-            <h2 className="mb-4 text-lg font-semibold text-text-primary">Location</h2>
-            <div className="grid gap-4 sm:grid-cols-2">
+          {currentStep.key === 'location' && (
+          <section className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
+            <div className="grid gap-4">
               <TextField
                 label="City / town"
                 value={form.city}
@@ -543,13 +605,13 @@ function ProfileBuilder() {
               </Button>
             </div>
           </section>
+          )}
 
           {/* Photos */}
-          <section className="rounded-2xl border border-border bg-surface p-5">
-            <h2 className="mb-1 text-lg font-semibold text-text-primary">Photos</h2>
+          {currentStep.key === 'photos' && (
+          <section className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
             <p className="mb-4 text-xs text-text-secondary">
-              MOCK/TEMPORARY: real photo hosting (Cloudinary) isn't wired up yet — photos are
-              stored as a URL or a local image you pick, up to {MAX_PHOTOS}.
+              Photos are stored as a URL or a local image you pick, up to {MAX_PHOTOS}.
             </p>
             <div className="mb-4 grid grid-cols-3 gap-3 sm:grid-cols-4">
               {photos.map((photo) => (
@@ -603,10 +665,11 @@ function ProfileBuilder() {
               </div>
             )}
           </section>
+          )}
 
           {/* Bio + interests + languages */}
-          <section className="rounded-2xl border border-border bg-surface p-5 space-y-4">
-            <h2 className="text-lg font-semibold text-text-primary">Bio & interests</h2>
+          {currentStep.key === 'bio' && (
+          <section className="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-4">
             <TextField
               as="textarea"
               label="Bio"
@@ -658,13 +721,14 @@ function ProfileBuilder() {
               </div>
             </div>
           </section>
+          )}
 
           {/* Social (Instagram handle) — post-MVP, user-requested; see MOCK_FEATURES.md.
               Self-reported only, not real Instagram OAuth (no Meta Developer app
               registered for this project — same mock-integration pattern already used
               for SMS/OTP, Cloudinary, Razorpay). */}
-          <section className="rounded-2xl border border-border bg-surface p-5 space-y-3">
-            <h2 className="text-lg font-semibold text-text-primary">Social</h2>
+          {currentStep.key === 'social' && (
+          <section className="rounded-2xl border border-border bg-surface p-5 shadow-sm space-y-3">
             <TextField
               label="Instagram username"
               value={form.instagramHandle}
@@ -683,10 +747,11 @@ function ProfileBuilder() {
               </a>
             )}
           </section>
+          )}
 
           {/* Personality prompts */}
-          <section className="rounded-2xl border border-border bg-surface p-5">
-            <h2 className="mb-1 text-lg font-semibold text-text-primary">Personality prompts</h2>
+          {currentStep.key === 'prompts' && (
+          <section className="rounded-2xl border border-border bg-surface p-5 shadow-sm">
             <p className="mb-4 text-xs text-text-secondary">
               Answer up to {MAX_PROMPTS} prompts to help others get to know you.
             </p>
@@ -736,15 +801,33 @@ function ProfileBuilder() {
               </div>
             )}
           </section>
+          )}
 
-          <div className="flex gap-3">
-            <Button type="submit" loading={saving} className="flex-1">
-              Save profile
-            </Button>
-            <Button type="button" variant="secondary" onClick={() => navigate('/dashboard')}>
-              Done for now
-            </Button>
+          <div className="mt-6 flex gap-3">
+            {!isFirstStep && (
+              <Button type="button" variant="secondary" onClick={handleBack}>
+                Back
+              </Button>
+            )}
+            {isLastStep ? (
+              <Button type="submit" loading={saving} className="flex-1">
+                Finish
+              </Button>
+            ) : (
+              <Button type="button" loading={saving} className="flex-1" onClick={handleNext}>
+                Next
+              </Button>
+            )}
           </div>
+          {!isLastStep && (
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard')}
+              className="mt-3 w-full text-center text-xs text-text-secondary hover:text-primary"
+            >
+              I'll finish this later
+            </button>
+          )}
         </form>
       </div>
     </div>
